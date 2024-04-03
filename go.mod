@@ -38,7 +38,7 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/maruel/natural v1.1.1
 	github.com/meilisearch/meilisearch-go v0.26.1
-	github.com/minio/sio v0.3.0
+	github.com/minio/sio v0.3.1
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/ncw/swift/v2 v2.0.2
 	github.com/orzogc/fake115uploader v0.3.3-0.20230715111618-58f9eb76f831
