@@ -33,6 +33,7 @@ const (
 	ProxyIgnoreHeaders       = "proxy_ignore_headers"
 	AudioAutoplay            = "audio_autoplay"
 	VideoAutoplay            = "video_autoplay"
+	ThumbnailSize            = "thumbnail_size"
 	PreviewArchivesByDefault = "preview_archives_by_default"
 	ReadMeAutoRender         = "readme_autorender"
 	FilterReadMeScripts      = "filter_readme_scripts"
