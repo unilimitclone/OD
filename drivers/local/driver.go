@@ -18,6 +18,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/driver"
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/model"
+	"github.com/alist-org/alist/v3/internal/op"
 	"github.com/alist-org/alist/v3/internal/sign"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/alist-org/alist/v3/server/common"
@@ -31,6 +32,7 @@ type Local struct {
 	model.Storage
 	Addition
 	mkdirPerm int32
+	thumbSize int
 
 	// zero means no limit
 	thumbConcurrency int
@@ -70,6 +72,17 @@ func (d *Local) Init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+	}
+	d.thumbSize = 144
+	if item, err := op.GetSettingItemByKey(conf.ThumbnailSize); err == nil && item != nil && strings.TrimSpace(item.Value) != "" {
+		v, err := strconv.ParseUint(item.Value, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid setting %s value: %s, err: %s", conf.ThumbnailSize, item.Value, err)
+		}
+		if v == 0 {
+			return fmt.Errorf("invalid setting %s value: %s, the value must be a positive integer", conf.ThumbnailSize, item.Value)
+		}
+		d.thumbSize = int(v)
 	}
 	if d.ThumbConcurrency != "" {
 		v, err := strconv.ParseUint(d.ThumbConcurrency, 10, 32)
