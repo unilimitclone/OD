@@ -2,9 +2,10 @@ package handles
 
 import (
 	"fmt"
-	"github.com/alist-org/alist/v3/internal/task"
 	"io"
 	stdpath "path"
+
+	"github.com/alist-org/alist/v3/internal/task"
 
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/fs"
@@ -213,6 +214,22 @@ type RenameReq struct {
 	Overwrite bool   `json:"overwrite"`
 }
 
+func canRenamePath(c *gin.Context, reqPath string) bool {
+	meta, err := op.GetNearestMeta(reqPath)
+	if err != nil {
+		if !errors.Is(errors.Cause(err), errs.MetaNotFound) {
+			common.ErrorResp(c, err, 500, true)
+			return false
+		}
+		return true
+	}
+	if meta != nil && meta.Password != "" && common.IsApply(meta.Path, reqPath, meta.PSub) {
+		common.ErrorStrResp(c, "Path is password-protected and cannot be renamed.", 403)
+		return false
+	}
+	return true
+}
+
 func FsRename(c *gin.Context) {
 	var req RenameReq
 	if err := c.ShouldBind(&req); err != nil {
@@ -227,6 +244,9 @@ func FsRename(c *gin.Context) {
 	}
 	if !common.CheckPathLimitWithRoles(user, reqPath) {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
+		return
+	}
+	if !canRenamePath(c, reqPath) {
 		return
 	}
 	perm := common.MergeRolePermissions(user, reqPath)

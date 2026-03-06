@@ -195,6 +195,9 @@ func FsBatchRename(c *gin.Context) {
 			common.ErrorResp(c, err, 400)
 			return
 		}
+		if !canRenamePath(c, filePath) {
+			return
+		}
 		if err := fs.Rename(c, filePath, renameObject.NewName); err != nil {
 			common.ErrorResp(c, err, 500)
 			return
@@ -259,6 +262,9 @@ func FsRegexRename(c *gin.Context) {
 			filePath, err := utils.JoinUnderBase(reqPath, file.GetName())
 			if err != nil {
 				common.ErrorResp(c, err, 500)
+				return
+			}
+			if !canRenamePath(c, filePath) {
 				return
 			}
 			newFileName := srcRegexp.ReplaceAllString(file.GetName(), req.NewNameRegex)
