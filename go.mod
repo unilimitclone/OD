@@ -3,10 +3,13 @@ module github.com/alist-org/alist/v3
 go 1.23.4
 
 require (
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.17.0
+	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.0
 	github.com/KirCute/ftpserverlib-pasvportmap v1.25.0
 	github.com/KirCute/sftpd-alist v0.0.12
 	github.com/ProtonMail/go-crypto v1.0.0
-	github.com/SheltonZhu/115driver v1.0.34
+	github.com/ProtonMail/gopenpgp/v2 v2.7.4
+	github.com/SheltonZhu/115driver v1.2.3-1
 	github.com/Xhofe/go-cache v0.0.0-20240804043513-b1a71927bc21
 	github.com/Xhofe/rateg v0.0.0-20230728072201-251a4e1adad4
 	github.com/alist-org/gofakes3 v0.0.7
@@ -36,6 +39,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hekmon/transmissionrpc/v3 v3.0.0
+	github.com/henrybear327/Proton-API-Bridge v1.0.0
+	github.com/henrybear327/go-proton-api v1.0.0
 	github.com/hirochachacha/go-smb2 v1.1.0
 	github.com/ipfs/go-ipfs-api v0.7.0
 	github.com/jlaffaye/ftp v0.2.0
@@ -69,7 +74,7 @@ require (
 	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
 	golang.org/x/image v0.19.0
 	golang.org/x/net v0.38.0
-	golang.org/x/oauth2 v0.22.0
+	golang.org/x/oauth2 v0.30.0
 	golang.org/x/time v0.8.0
 	google.golang.org/appengine v1.6.8
 	gopkg.in/ldap.v3 v3.1.0
@@ -80,9 +85,19 @@ require (
 )
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.17.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.10.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.0 // indirect
+	github.com/ProtonMail/bcrypt v0.0.0-20211005172633-e235017c1baf // indirect
+	github.com/ProtonMail/gluon v0.17.1-0.20230724134000-308be39be96e // indirect
+	github.com/ProtonMail/go-mime v0.0.0-20230322103455-7d82a3887f2f // indirect
+	github.com/ProtonMail/go-srp v0.0.7 // indirect
+	github.com/PuerkitoBio/goquery v1.8.1 // indirect
+	github.com/andybalholm/cascadia v1.3.2 // indirect
+	github.com/bradenaw/juniper v0.15.2 // indirect
+	github.com/cronokirby/saferith v0.33.0 // indirect
+	github.com/emersion/go-message v0.18.0 // indirect
+	github.com/emersion/go-textwrapper v0.0.0-20200911093747-65d896831594 // indirect
+	github.com/emersion/go-vcard v0.0.0-20230815062825-8fda7d206ec9 // indirect
+	github.com/relvacode/iso8601 v1.3.0 // indirect
 )
 
 require (
@@ -109,7 +124,6 @@ require (
 	github.com/ipfs/boxo v0.12.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.1 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/matoous/go-nanoid/v2 v2.1.0 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/nwaples/rardecode/v2 v2.0.0-beta.4.0.20241112120701-034e449c6e78
@@ -268,4 +282,8 @@ require (
 	lukechampine.com/blake3 v1.1.7 // indirect
 )
 
-// replace github.com/xhofe/115-sdk-go => ../../xhofe/115-sdk-go
+replace github.com/ProtonMail/go-proton-api => github.com/henrybear327/go-proton-api v1.0.0
+
+replace github.com/cronokirby/saferith => github.com/Da3zKi7/saferith v0.33.0-fixed
+
+replace github.com/SheltonZhu/115driver => github.com/okatu-loli/115driver v1.2.3-1

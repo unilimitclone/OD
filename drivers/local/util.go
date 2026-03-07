@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,14 +19,18 @@ import (
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 )
 
-func isSymlinkDir(f fs.FileInfo, path string) bool {
-	if f.Mode()&os.ModeSymlink == os.ModeSymlink {
-		dst, err := os.Readlink(filepath.Join(path, f.Name()))
+func isLinkedDir(f fs.FileInfo, path string) bool {
+	if f.Mode()&os.ModeSymlink == os.ModeSymlink || (runtime.GOOS == "windows" && f.Mode()&os.ModeIrregular != 0) {
+		dst, err := os.Readlink(path)
 		if err != nil {
 			return false
 		}
 		if !filepath.IsAbs(dst) {
-			dst = filepath.Join(path, dst)
+			dst = filepath.Join(filepath.Dir(path), dst)
+		}
+		dst, err = filepath.Abs(dst)
+		if err != nil {
+			return false
 		}
 		stat, err := os.Stat(dst)
 		if err != nil {
@@ -187,7 +192,7 @@ func readDir(dirname string) ([]fs.FileInfo, error) {
 func (d *Local) getThumb(file model.Obj) (*bytes.Buffer, *string, error) {
 	fullPath := file.GetPath()
 	thumbPrefix := "alist_thumb_"
-	thumbName := thumbPrefix + utils.GetMD5EncodeStr(fullPath) + ".png"
+	thumbName := thumbPrefix + utils.GetMD5EncodeStr(fmt.Sprintf("%s:%d", fullPath, d.thumbSize)) + ".png"
 	if d.ThumbCacheFolder != "" {
 		// skip if the file is a thumbnail
 		if strings.HasPrefix(file.GetName(), thumbPrefix) {

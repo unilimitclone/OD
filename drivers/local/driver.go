@@ -18,6 +18,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/driver"
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/model"
+	"github.com/alist-org/alist/v3/internal/op"
 	"github.com/alist-org/alist/v3/internal/sign"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/alist-org/alist/v3/server/common"
@@ -31,6 +32,7 @@ type Local struct {
 	model.Storage
 	Addition
 	mkdirPerm int32
+	thumbSize int
 
 	// zero means no limit
 	thumbConcurrency int
@@ -77,6 +79,17 @@ func (d *Local) Init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+	}
+	d.thumbSize = 144
+	if item, err := op.GetSettingItemByKey(conf.ThumbnailSize); err == nil && item != nil && strings.TrimSpace(item.Value) != "" {
+		v, err := strconv.ParseUint(item.Value, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid setting %s value: %s, err: %s", conf.ThumbnailSize, item.Value, err)
+		}
+		if v == 0 {
+			return fmt.Errorf("invalid setting %s value: %s, the value must be a positive integer", conf.ThumbnailSize, item.Value)
+		}
+		d.thumbSize = int(v)
 	}
 	if d.ThumbConcurrency != "" {
 		v, err := strconv.ParseUint(d.ThumbConcurrency, 10, 32)
@@ -161,13 +174,14 @@ func (d *Local) FileInfoToObj(ctx context.Context, f fs.FileInfo, reqPath string
 			thumb += "?type=thumb&sign=" + sign.Sign(stdpath.Join(reqPath, f.Name()))
 		}
 	}
-	isFolder := f.IsDir() || isSymlinkDir(f, fullPath)
+	filePath := filepath.Join(fullPath, f.Name())
+	isFolder := f.IsDir() || isLinkedDir(f, filePath)
 	var size int64
 	if !isFolder {
 		size = f.Size()
 	}
 	var ctime time.Time
-	t, err := times.Stat(stdpath.Join(fullPath, f.Name()))
+	t, err := times.Stat(filePath)
 	if err == nil {
 		if t.HasBirthTime() {
 			ctime = t.BirthTime()
@@ -176,7 +190,7 @@ func (d *Local) FileInfoToObj(ctx context.Context, f fs.FileInfo, reqPath string
 
 	file := model.ObjThumb{
 		Object: model.Object{
-			Path:     filepath.Join(fullPath, f.Name()),
+			Path:     filePath,
 			Name:     f.Name(),
 			Modified: f.ModTime(),
 			Size:     size,
@@ -212,7 +226,7 @@ func (d *Local) Get(ctx context.Context, path string) (model.Obj, error) {
 		}
 		return nil, err
 	}
-	isFolder := f.IsDir() || isSymlinkDir(f, path)
+	isFolder := f.IsDir() || isLinkedDir(f, path)
 	size := f.Size()
 	if isFolder {
 		size = 0

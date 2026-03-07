@@ -60,6 +60,7 @@ type TasksConfig struct {
 	Copy               TaskConfig `json:"copy" envPrefix:"COPY_"`
 	Decompress         TaskConfig `json:"decompress" envPrefix:"DECOMPRESS_"`
 	DecompressUpload   TaskConfig `json:"decompress_upload" envPrefix:"DECOMPRESS_UPLOAD_"`
+	S3Transition       TaskConfig `json:"s3_transition" envPrefix:"S3_TRANSITION_"`
 	AllowRetryCanceled bool       `json:"allow_retry_canceled" env:"ALLOW_RETRY_CANCELED"`
 }
 
@@ -155,7 +156,7 @@ func DefaultConfig() *Config {
 		},
 		MaxConnections:        0,
 		MaxConcurrency:        64,
-		TlsInsecureSkipVerify: true,
+		TlsInsecureSkipVerify: false,
 		Tasks: TasksConfig{
 			Download: TaskConfig{
 				Workers:  5,
@@ -183,6 +184,11 @@ func DefaultConfig() *Config {
 			DecompressUpload: TaskConfig{
 				Workers:  5,
 				MaxRetry: 2,
+			},
+			S3Transition: TaskConfig{
+				Workers:  5,
+				MaxRetry: 2,
+				// TaskPersistant: true,
 			},
 			AllowRetryCanceled: false,
 		},

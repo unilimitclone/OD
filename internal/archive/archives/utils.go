@@ -1,12 +1,13 @@
 package archives
 
 import (
+	"fmt"
 	"io"
 	fs2 "io/fs"
 	"os"
-	stdpath "path"
 	"strings"
 
+	"github.com/alist-org/alist/v3/internal/archive/tool"
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/model"
 	"github.com/alist-org/alist/v3/internal/stream"
@@ -59,7 +60,7 @@ func filterPassword(err error) error {
 	return err
 }
 
-func decompress(fsys fs2.FS, filePath, targetPath string, up model.UpdateProgress) error {
+func decompress(fsys fs2.FS, filePath, dstPath string, up model.UpdateProgress) error {
 	rc, err := fsys.Open(filePath)
 	if err != nil {
 		return err
@@ -69,7 +70,10 @@ func decompress(fsys fs2.FS, filePath, targetPath string, up model.UpdateProgres
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(stdpath.Join(targetPath, stat.Name()), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if !stat.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s", tool.ErrArchiveIllegalPath, filePath)
+	}
+	f, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
