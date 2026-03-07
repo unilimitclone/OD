@@ -80,7 +80,7 @@ func resizeImageToBufferWithFFmpegGo(inputFile string, width int, outputFormat s
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg-go failed to resize image %s to buffer: %w", inputFile, err)
 	}
-	if outBuffer.Len() == 0 {
+	if outBuffer == nil || outBuffer.Len() == 0 {
 		return nil, fmt.Errorf("ffmpeg-go produced empty buffer for %s", inputFile)
 	}
 
