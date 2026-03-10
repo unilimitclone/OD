@@ -20,6 +20,8 @@ type Addition struct {
 	EncodePath        bool   `json:"encodePath" default:"true" required:"true" help:"Encode path in strm content"`
 	WithoutUrl        bool   `json:"withoutUrl" default:"false" help:"Generate path-only strm content"`
 	WithSign          bool   `json:"withSign" default:"false" help:"Append sign query to generated URL"`
+	SignExpireHours   int    `json:"SignExpireHours" type:"number" default:"0" help:"Driver-level sign expiration in hours. 0 uses global link_expiration"`
+	RotateSignNow     bool   `json:"RotateSignNow" type:"bool" default:"false" help:"Set true and save to rotate signs now (rewrite local STRM), then auto reset to false"`
 	SaveStrmToLocal   bool   `json:"SaveStrmToLocal" default:"false" help:"Save generated files to local disk"`
 	SaveStrmLocalPath string `json:"SaveStrmLocalPath" type:"text" help:"Local path for generated files"`
 	SaveLocalMode     string `json:"SaveLocalMode" type:"select" help:"Local save mode" options:"insert,update,sync" default:"insert"`

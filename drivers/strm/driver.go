@@ -11,6 +11,8 @@ import (
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/fs"
 	"github.com/alist-org/alist/v3/internal/model"
+	"github.com/alist-org/alist/v3/internal/op"
+	log "github.com/sirupsen/logrus"
 )
 
 type Strm struct {
@@ -69,6 +71,20 @@ func (d *Strm) Init(ctx context.Context) error {
 	}
 	if d.SaveLocalMode == "" {
 		d.SaveLocalMode = SaveLocalInsertMode
+	}
+	if d.SignExpireHours < 0 {
+		d.SignExpireHours = 0
+	}
+	if d.RotateSignNow {
+		d.RotateSignNow = false
+		op.MustSaveDriverStorage(d)
+		if d.SaveStrmToLocal && strings.TrimSpace(d.SaveStrmLocalPath) != "" {
+			go func() {
+				log.Infof("strm: start rotating signs for [%s]", d.MountPath)
+				d.rotateAllLocal(context.Background())
+				log.Infof("strm: finished rotating signs for [%s]", d.MountPath)
+			}()
+		}
 	}
 	return nil
 }
@@ -157,6 +173,36 @@ func (d *Strm) listVirtualRoots() []model.Obj {
 		})
 	}
 	return objs
+}
+
+func (d *Strm) rotateAllLocal(ctx context.Context) {
+	for alias, roots := range d.aliases {
+		virtualRoot := "/"
+		if !d.autoFlatten {
+			virtualRoot = "/" + alias
+		}
+		for _, realRoot := range roots {
+			d.walkAndSync(ctx, virtualRoot, realRoot)
+		}
+	}
+}
+
+func (d *Strm) walkAndSync(ctx context.Context, virtualDir, realDir string) {
+	objs, err := fs.List(ctx, realDir, &fs.ListArgs{NoLog: true, Refresh: true})
+	if err != nil {
+		log.Warnf("strm: rotate list failed %s: %v", realDir, err)
+		return
+	}
+	mapped := d.mapListedObjects(ctx, realDir, objs)
+	d.syncLocalDirWithMode(ctx, virtualDir, mapped, SaveLocalUpdateMode)
+	for _, obj := range objs {
+		if !obj.IsDir() {
+			continue
+		}
+		childVirtual := stdpath.Join(virtualDir, obj.GetName())
+		childReal := stdpath.Join(realDir, obj.GetName())
+		d.walkAndSync(ctx, childVirtual, childReal)
+	}
 }
 
 func (d *Strm) mapListedObjects(ctx context.Context, realDir string, listed []model.Obj) []model.Obj {

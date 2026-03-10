@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/alist-org/alist/v3/drivers/base"
 	"github.com/alist-org/alist/v3/internal/fs"
@@ -128,7 +129,7 @@ func (d *Strm) buildStrmLine(ctx context.Context, realPath string) string {
 		if strings.Contains(pathPart, "?") {
 			sep = "&"
 		}
-		pathPart += sep + "sign=" + sign.Sign(realPath)
+		pathPart += sep + "sign=" + d.generateSign(realPath)
 	}
 	joined := stdpath.Join(d.normalizedPrefix, pathPart)
 	if !strings.HasPrefix(joined, "/") {
@@ -170,13 +171,17 @@ func (d *Strm) linkRealFile(ctx context.Context, realPath string, args model.Lin
 		if api == "" {
 			api = common.GetApiUrl(nil)
 		}
-		return &model.Link{URL: fmt.Sprintf("%s/p%s?sign=%s", api, utils.EncodePath(realPath, true), sign.Sign(realPath))}, nil
+		return &model.Link{URL: fmt.Sprintf("%s/p%s?sign=%s", api, utils.EncodePath(realPath, true), d.generateSign(realPath))}, nil
 	}
 	link, _, linkErr := op.Link(ctx, storage, actualPath, args)
 	return link, linkErr
 }
 
 func (d *Strm) syncLocalDir(ctx context.Context, virtualDir string, objs []model.Obj) {
+	d.syncLocalDirWithMode(ctx, virtualDir, objs, d.normalizedMode)
+}
+
+func (d *Strm) syncLocalDirWithMode(ctx context.Context, virtualDir string, objs []model.Obj, mode string) {
 	if !d.SaveStrmToLocal || strings.TrimSpace(d.SaveStrmLocalPath) == "" {
 		return
 	}
@@ -204,12 +209,12 @@ func (d *Strm) syncLocalDir(ctx context.Context, virtualDir string, objs []model
 			log.Warnf("strm: build local payload failed %s: %v", localPath, err)
 			continue
 		}
-		if err = d.writeLocal(localPath, payload); err != nil {
+		if err = d.writeLocal(localPath, payload, mode); err != nil {
 			log.Warnf("strm: write local failed %s: %v", localPath, err)
 		}
 	}
 
-	if d.normalizedMode == SaveLocalSyncMode {
+	if mode == SaveLocalSyncMode {
 		d.syncDeleteExtras(localDir, expected)
 	}
 }
@@ -259,19 +264,19 @@ func readLinkBytes(ctx context.Context, link *model.Link) ([]byte, error) {
 	return io.ReadAll(res.RawBody())
 }
 
-func (d *Strm) writeLocal(path string, payload []byte) error {
-	if d.normalizedMode == SaveLocalInsertMode && utils.Exists(path) {
+func (d *Strm) writeLocal(path string, payload []byte, mode string) error {
+	if mode == SaveLocalInsertMode && utils.Exists(path) {
 		return nil
 	}
 	if st, err := os.Stat(path); err == nil && st.IsDir() {
-		if d.normalizedMode != SaveLocalSyncMode {
+		if mode != SaveLocalSyncMode {
 			return nil
 		}
 		if err = os.RemoveAll(path); err != nil {
 			return err
 		}
 	}
-	if d.normalizedMode != SaveLocalInsertMode {
+	if mode != SaveLocalInsertMode {
 		if old, err := os.ReadFile(path); err == nil {
 			if bytes.Equal(old, payload) {
 				return nil
@@ -302,4 +307,11 @@ func (d *Strm) syncDeleteExtras(localDir string, expected map[string]bool) {
 			_ = os.RemoveAll(full)
 		}
 	}
+}
+
+func (d *Strm) generateSign(path string) string {
+	if d.SignExpireHours > 0 {
+		return sign.WithDuration(path, time.Duration(d.SignExpireHours)*time.Hour)
+	}
+	return sign.Sign(path)
 }
