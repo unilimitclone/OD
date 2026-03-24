@@ -215,6 +215,46 @@ func (d *Yun139) requestRoute(data interface{}, resp interface{}) ([]byte, error
 	return res.Body(), nil
 }
 
+func (d *Yun139) ensurePersonalCloudHost() error {
+	if d.ref != nil {
+		return d.ref.ensurePersonalCloudHost()
+	}
+	if d.PersonalCloudHost != "" {
+		return nil
+	}
+	if len(d.Authorization) == 0 {
+		return fmt.Errorf("authorization is empty")
+	}
+	if d.Account == "" {
+		if err := d.refreshToken(); err != nil {
+			return err
+		}
+	}
+
+	var resp QueryRoutePolicyResp
+	_, err := d.requestRoute(base.Json{
+		"userInfo": base.Json{
+			"userType":    1,
+			"accountType": 1,
+			"accountName": d.Account,
+		},
+		"modAddrType": 1,
+	}, &resp)
+	if err != nil {
+		return err
+	}
+	for _, policyItem := range resp.Data.RoutePolicyList {
+		if policyItem.ModName == "personal" && policyItem.HttpsUrl != "" {
+			d.PersonalCloudHost = strings.TrimRight(policyItem.HttpsUrl, "/")
+			break
+		}
+	}
+	if d.PersonalCloudHost == "" {
+		return fmt.Errorf("personal cloud host is empty")
+	}
+	return nil
+}
+
 func (d *Yun139) post(pathname string, data interface{}, resp interface{}) ([]byte, error) {
 	return d.request(pathname, http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data)
@@ -449,6 +489,9 @@ func unicode(str string) string {
 }
 
 func (d *Yun139) personalRequest(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	if err := d.ensurePersonalCloudHost(); err != nil {
+		return nil, err
+	}
 	url := d.getPersonalCloudHost() + pathname
 	req := base.RestyClient.R()
 	randStr := random.String(16)
