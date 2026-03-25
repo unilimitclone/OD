@@ -41,7 +41,11 @@ func CanAccess(user *model.User, meta *model.Meta, reqPath string, password stri
 // 2. storage.WebProxy
 // 3. proxy_types
 func ShouldProxy(storage driver.Driver, filename string) bool {
-	if storage.Config().MustProxy() || storage.GetStorage().WebProxy {
+	if proxyDriver, ok := storage.(driver.ProxyDriver); ok {
+		if proxyDriver.ShouldProxyDownloads() || storage.GetStorage().WebProxy {
+			return true
+		}
+	} else if storage.Config().MustProxy() || storage.GetStorage().WebProxy {
 		return true
 	}
 	if utils.SliceContains(conf.SlicesMap[conf.ProxyTypes], utils.Ext(filename)) {

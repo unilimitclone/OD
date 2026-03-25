@@ -377,12 +377,21 @@ func FsGet(c *gin.Context) {
 			common.ErrorResp(c, err, 500)
 			return
 		}
+		query := ""
+		if isEncrypt(meta, reqPath) || setting.GetBool(conf.SignAll) {
+			query = "?sign=" + sign.Sign(reqPath)
+		}
+		forceRedirectRawURL := storage.GetStorage().Driver == "BaiduYouth"
 		forceProxyRawURL := storage.GetStorage().Driver == "Quark" && utils.GetFileType(obj.GetName()) == conf.VIDEO
-		if storage.Config().MustProxy() || storage.GetStorage().WebProxy || forceProxyRawURL {
-			query := ""
-			if isEncrypt(meta, reqPath) || setting.GetBool(conf.SignAll) {
-				query = "?sign=" + sign.Sign(reqPath)
-			}
+		if forceRedirectRawURL {
+			// Baidu Youth direct links are minted per request and are not stable enough
+			// to expose as fs/get raw_url. Return the local /d endpoint so the frontend
+			// obtains a fresh link on each download click.
+			rawURL = fmt.Sprintf("%s/d%s%s",
+				common.GetApiUrl(c.Request),
+				utils.EncodePath(reqPath, true),
+				query)
+		} else if storage.Config().MustProxy() || storage.GetStorage().WebProxy || forceProxyRawURL {
 			if storage.GetStorage().DownProxyUrl != "" {
 				rawURL = common.BuildDownProxyURL(
 					storage.GetStorage().DownProxyUrl,
