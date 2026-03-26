@@ -381,6 +381,35 @@ func (d *Streamtape) Put(ctx context.Context, dstDir model.Obj, file model.FileS
 	}, nil
 }
 
+// PutURL initiates a remote upload from an external URL
+func (d *Streamtape) PutURL(ctx context.Context, dstDir model.Obj, name, url string) (model.Obj, error) {
+	folderID := d.RootFolderID
+	if dstDir.GetID() != "" {
+		folderID = folderIDFromObjID(dstDir.GetID())
+	}
+
+	params := map[string]string{
+		"url": url,
+	}
+	if folderID != "" && folderID != "0" {
+		params["folder"] = folderID
+	}
+	if name != "" {
+		params["name"] = name
+	}
+
+	var result remoteDlAddResult
+	if err := d.callAPI(ctx, "/remotedl/add", params, &result); err != nil {
+		return nil, err
+	}
+
+	return &model.Object{
+		ID:       encodeRemoteUploadID(result.ID),
+		Name:     name,
+		IsFolder: false,
+	}, nil
+}
+
 func (d *Streamtape) GetArchiveMeta(ctx context.Context, obj model.Obj, args model.ArchiveArgs) (model.ArchiveMeta, error) {
 	return nil, errs.NotImplement
 }
