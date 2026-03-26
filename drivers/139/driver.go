@@ -47,27 +47,11 @@ func (d *Yun139) Init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-
-		// Query Route Policy
-		var resp QueryRoutePolicyResp
-		_, err = d.requestRoute(base.Json{
-			"userInfo": base.Json{
-				"userType":    1,
-				"accountType": 1,
-				"accountName": d.Account},
-			"modAddrType": 1,
-		}, &resp)
-		if err != nil {
-			return err
-		}
-		for _, policyItem := range resp.Data.RoutePolicyList {
-			if policyItem.ModName == "personal" {
-				d.PersonalCloudHost = policyItem.HttpsUrl
-				break
+		if d.Addition.Type == MetaPersonalNew {
+			err = d.ensurePersonalCloudHost()
+			if err != nil {
+				return err
 			}
-		}
-		if len(d.PersonalCloudHost) == 0 {
-			return fmt.Errorf("PersonalCloudHost is empty")
 		}
 
 		d.cron = cron.NewCron(time.Hour * 12)
