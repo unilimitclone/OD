@@ -331,6 +331,9 @@ func (d *Streamtape) Put(ctx context.Context, dstDir model.Obj, file model.FileS
 	if folderID != "" && folderID != "0" {
 		params["folder"] = folderID
 	}
+	if d.Sha256 != "" {
+		params["sha256"] = d.Sha256
+	}
 
 	var uploadURL uploadURLResult
 	if err := d.callAPI(ctx, "/file/ul", params, &uploadURL); err != nil {
