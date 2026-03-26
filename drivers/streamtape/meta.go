@@ -27,7 +27,7 @@ var config = driver.Config{
 	NeedMs:            false,
 	DefaultRoot:       "0",
 	CheckStatus:       false,
-	Alert:             "Moving files to root folder is not supported by Streamtape API",
+	Alert:             "warning|Moving files to root folder is not supported by Streamtape API",
 	NoOverwriteUpload: false,
 	ProxyRangeOption:  true,
 }
