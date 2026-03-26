@@ -49,16 +49,28 @@ func (d *Chunker) Init(ctx context.Context) error {
 		return err
 	}
 
-	storage, err := fs.GetStorage(d.RemotePath, &fs.GetStoragesArgs{})
-	if err != nil {
-		return fmt.Errorf("can't find remote storage: %w", err)
+	targetPaths := d.configuredRemotePaths()
+	d.remoteTargets = make([]remoteTarget, 0, len(targetPaths))
+	for _, targetPath := range targetPaths {
+		storage, err := fs.GetStorage(targetPath, &fs.GetStoragesArgs{})
+		if err != nil {
+			return fmt.Errorf("can't find remote storage %q: %w", targetPath, err)
+		}
+		d.remoteTargets = append(d.remoteTargets, remoteTarget{
+			MountPath: targetPath,
+			Storage:   storage,
+		})
 	}
-	d.remoteStorage = storage
+	if len(d.remoteTargets) == 0 {
+		return fmt.Errorf("can't find remote storage: %w", errs.ObjectNotFound)
+	}
+	d.remoteStorage = d.remoteTargets[0].Storage
 	return nil
 }
 
 func (d *Chunker) Drop(ctx context.Context) error {
 	d.remoteStorage = nil
+	d.remoteTargets = nil
 	return nil
 }
 
@@ -93,22 +105,26 @@ func (d *Chunker) Get(ctx context.Context, pathStr string) (model.Obj, error) {
 func (d *Chunker) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	obj := d.linkedObject(file)
 	if obj == nil || !obj.Chunked {
-		actualPath, err := d.getActualPathForRemote(file.GetPath())
+		remoteIndex := 0
+		if obj != nil {
+			remoteIndex = obj.MainRemoteIndex
+		}
+		actualPath, err := d.getActualPathForRemoteOnTarget(file.GetPath(), remoteIndex)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert path to remote path: %w", err)
 		}
-		link, _, err := op.Link(ctx, d.remoteStorage, actualPath, args)
+		link, _, err := op.Link(ctx, d.remoteTargets[remoteIndex].Storage, actualPath, args)
 		return link, err
 	}
 
 	linkedParts := make([]linkedPart, 0, len(obj.Parts))
 	baseClosers := utils.EmptyClosers()
 	for _, part := range obj.Parts {
-		actualPath, err := d.getActualChunkPath(obj.GetPath(), part.No, part.XactID)
+		actualPath, err := d.getActualChunkPath(obj.GetPath(), part.No, part.XactID, part.RemoteIndex)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert chunk path: %w", err)
 		}
-		link, _, err := op.Link(ctx, d.remoteStorage, actualPath, args)
+		link, _, err := op.Link(ctx, d.remoteTargets[part.RemoteIndex].Storage, actualPath, args)
 		if err != nil {
 			return nil, err
 		}
@@ -135,37 +151,50 @@ func (d *Chunker) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 }
 
 func (d *Chunker) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
-	dstDirActualPath, err := d.getActualPathForRemote(parentDir.GetPath())
-	if err != nil {
-		return fmt.Errorf("failed to convert path to remote path: %w", err)
-	}
-	return op.MakeDir(ctx, d.remoteStorage, path.Join(dstDirActualPath, dirName))
+	return d.ensureDirOnAllTargets(ctx, path.Join(parentDir.GetPath(), dirName))
 }
 
 func (d *Chunker) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
+	if srcObj.IsDir() {
+		return d.moveDirAcrossTargets(ctx, srcObj.GetPath(), dstDir.GetPath())
+	}
 	obj := d.linkedObject(srcObj)
-	if srcObj.IsDir() || obj == nil || !obj.Chunked {
-		srcRemoteActualPath, err := d.getActualPathForRemote(srcObj.GetPath())
+	if obj == nil || !obj.Chunked {
+		remoteIndex := 0
+		if obj != nil {
+			remoteIndex = obj.MainRemoteIndex
+		}
+		if err := d.ensureDirOnTarget(ctx, remoteIndex, dstDir.GetPath()); err != nil {
+			return err
+		}
+		srcRemoteActualPath, err := d.getActualPathForRemoteOnTarget(srcObj.GetPath(), remoteIndex)
 		if err != nil {
 			return fmt.Errorf("failed to convert path to remote path: %w", err)
 		}
-		dstRemoteActualPath, err := d.getActualPathForRemote(dstDir.GetPath())
+		dstRemoteActualPath, err := d.getActualPathForRemoteOnTarget(dstDir.GetPath(), remoteIndex)
 		if err != nil {
 			return fmt.Errorf("failed to convert path to remote path: %w", err)
 		}
-		return op.Move(ctx, d.remoteStorage, srcRemoteActualPath, dstRemoteActualPath)
+		return op.Move(ctx, d.remoteTargets[remoteIndex].Storage, srcRemoteActualPath, dstRemoteActualPath)
 	}
 
-	dstRemoteActualPath, err := d.getActualPathForRemote(dstDir.GetPath())
-	if err != nil {
-		return fmt.Errorf("failed to convert path to remote path: %w", err)
-	}
-	for _, logicalPath := range d.chunkPathsForObject(obj) {
-		actualPath, err := d.getActualPathForRemote(logicalPath)
+	ensuredTargets := map[int]struct{}{}
+	for _, location := range d.objectLocationsForObject(obj) {
+		if _, ok := ensuredTargets[location.RemoteIndex]; !ok {
+			if err := d.ensureDirOnTarget(ctx, location.RemoteIndex, dstDir.GetPath()); err != nil {
+				return err
+			}
+			ensuredTargets[location.RemoteIndex] = struct{}{}
+		}
+		actualPath, err := d.getActualPathForRemoteOnTarget(location.LogicalPath, location.RemoteIndex)
 		if err != nil {
 			return err
 		}
-		if err := op.Move(ctx, d.remoteStorage, actualPath, dstRemoteActualPath); err != nil {
+		dstRemoteActualPath, err := d.getActualPathForRemoteOnTarget(dstDir.GetPath(), location.RemoteIndex)
+		if err != nil {
+			return err
+		}
+		if err := op.Move(ctx, d.remoteTargets[location.RemoteIndex].Storage, actualPath, dstRemoteActualPath); err != nil {
 			return err
 		}
 	}
@@ -173,31 +202,38 @@ func (d *Chunker) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *Chunker) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
+	if srcObj.IsDir() {
+		return d.renameDirAcrossTargets(ctx, srcObj.GetPath(), newName)
+	}
 	obj := d.linkedObject(srcObj)
-	if srcObj.IsDir() || obj == nil || !obj.Chunked {
-		remoteActualPath, err := d.getActualPathForRemote(srcObj.GetPath())
+	if obj == nil || !obj.Chunked {
+		remoteIndex := 0
+		if obj != nil {
+			remoteIndex = obj.MainRemoteIndex
+		}
+		remoteActualPath, err := d.getActualPathForRemoteOnTarget(srcObj.GetPath(), remoteIndex)
 		if err != nil {
 			return fmt.Errorf("failed to convert path to remote path: %w", err)
 		}
-		return op.Rename(ctx, d.remoteStorage, remoteActualPath, newName)
+		return op.Rename(ctx, d.remoteTargets[remoteIndex].Storage, remoteActualPath, newName)
 	}
 
 	for _, part := range obj.Parts {
-		actualPath, err := d.getActualChunkPath(obj.GetPath(), part.No, part.XactID)
+		actualPath, err := d.getActualChunkPath(obj.GetPath(), part.No, part.XactID, part.RemoteIndex)
 		if err != nil {
 			return err
 		}
 		newChunkName := d.chunkPartBaseName(path.Join(path.Dir(obj.GetPath()), newName), part.No, part.XactID)
-		if err := op.Rename(ctx, d.remoteStorage, actualPath, newChunkName); err != nil {
+		if err := op.Rename(ctx, d.remoteTargets[part.RemoteIndex].Storage, actualPath, newChunkName); err != nil {
 			return err
 		}
 	}
 	if obj.UsesMeta {
-		actualPath, err := d.getActualPathForRemote(obj.GetPath())
+		actualPath, err := d.getActualPathForRemoteOnTarget(obj.GetPath(), obj.MainRemoteIndex)
 		if err != nil {
 			return err
 		}
-		if err := op.Rename(ctx, d.remoteStorage, actualPath, newName); err != nil {
+		if err := op.Rename(ctx, d.remoteTargets[obj.MainRemoteIndex].Storage, actualPath, newName); err != nil {
 			return err
 		}
 	}
@@ -205,29 +241,46 @@ func (d *Chunker) Rename(ctx context.Context, srcObj model.Obj, newName string) 
 }
 
 func (d *Chunker) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
+	if srcObj.IsDir() {
+		return d.copyDirAcrossTargets(ctx, srcObj.GetPath(), dstDir.GetPath())
+	}
 	obj := d.linkedObject(srcObj)
-	if srcObj.IsDir() || obj == nil || !obj.Chunked {
-		srcRemoteActualPath, err := d.getActualPathForRemote(srcObj.GetPath())
+	if obj == nil || !obj.Chunked {
+		remoteIndex := 0
+		if obj != nil {
+			remoteIndex = obj.MainRemoteIndex
+		}
+		if err := d.ensureDirOnTarget(ctx, remoteIndex, dstDir.GetPath()); err != nil {
+			return err
+		}
+		srcRemoteActualPath, err := d.getActualPathForRemoteOnTarget(srcObj.GetPath(), remoteIndex)
 		if err != nil {
 			return fmt.Errorf("failed to convert path to remote path: %w", err)
 		}
-		dstRemoteActualPath, err := d.getActualPathForRemote(dstDir.GetPath())
+		dstRemoteActualPath, err := d.getActualPathForRemoteOnTarget(dstDir.GetPath(), remoteIndex)
 		if err != nil {
 			return fmt.Errorf("failed to convert path to remote path: %w", err)
 		}
-		return op.Copy(ctx, d.remoteStorage, srcRemoteActualPath, dstRemoteActualPath)
+		return op.Copy(ctx, d.remoteTargets[remoteIndex].Storage, srcRemoteActualPath, dstRemoteActualPath)
 	}
 
-	dstRemoteActualPath, err := d.getActualPathForRemote(dstDir.GetPath())
-	if err != nil {
-		return fmt.Errorf("failed to convert path to remote path: %w", err)
-	}
-	for _, logicalPath := range d.chunkPathsForObject(obj) {
-		actualPath, err := d.getActualPathForRemote(logicalPath)
+	ensuredTargets := map[int]struct{}{}
+	for _, location := range d.objectLocationsForObject(obj) {
+		if _, ok := ensuredTargets[location.RemoteIndex]; !ok {
+			if err := d.ensureDirOnTarget(ctx, location.RemoteIndex, dstDir.GetPath()); err != nil {
+				return err
+			}
+			ensuredTargets[location.RemoteIndex] = struct{}{}
+		}
+		actualPath, err := d.getActualPathForRemoteOnTarget(location.LogicalPath, location.RemoteIndex)
 		if err != nil {
 			return err
 		}
-		if err := op.Copy(ctx, d.remoteStorage, actualPath, dstRemoteActualPath); err != nil {
+		dstRemoteActualPath, err := d.getActualPathForRemoteOnTarget(dstDir.GetPath(), location.RemoteIndex)
+		if err != nil {
+			return err
+		}
+		if err := op.Copy(ctx, d.remoteTargets[location.RemoteIndex].Storage, actualPath, dstRemoteActualPath); err != nil {
 			return err
 		}
 	}
@@ -235,21 +288,28 @@ func (d *Chunker) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *Chunker) Remove(ctx context.Context, obj model.Obj) error {
+	if obj.IsDir() {
+		return d.removeDirAcrossTargets(ctx, obj.GetPath())
+	}
 	chunkedObj := d.linkedObject(obj)
-	if obj.IsDir() || chunkedObj == nil || !chunkedObj.Chunked {
-		remoteActualPath, err := d.getActualPathForRemote(obj.GetPath())
+	if chunkedObj == nil || !chunkedObj.Chunked {
+		remoteIndex := 0
+		if chunkedObj != nil {
+			remoteIndex = chunkedObj.MainRemoteIndex
+		}
+		remoteActualPath, err := d.getActualPathForRemoteOnTarget(obj.GetPath(), remoteIndex)
 		if err != nil {
 			return fmt.Errorf("failed to convert path to remote path: %w", err)
 		}
-		return op.Remove(ctx, d.remoteStorage, remoteActualPath)
+		return op.Remove(ctx, d.remoteTargets[remoteIndex].Storage, remoteActualPath)
 	}
 
-	for _, logicalPath := range d.chunkPathsForObject(chunkedObj) {
-		actualPath, err := d.getActualPathForRemote(logicalPath)
+	for _, location := range d.objectLocationsForObject(chunkedObj) {
+		actualPath, err := d.getActualPathForRemoteOnTarget(location.LogicalPath, location.RemoteIndex)
 		if err != nil {
 			return err
 		}
-		if err := op.Remove(ctx, d.remoteStorage, actualPath); err != nil {
+		if err := op.Remove(ctx, d.remoteTargets[location.RemoteIndex].Storage, actualPath); err != nil {
 			return err
 		}
 	}
@@ -257,18 +317,21 @@ func (d *Chunker) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (d *Chunker) Put(ctx context.Context, dstDir model.Obj, streamer model.FileStreamer, up driver.UpdateProgress) error {
-	dstDirActualPath, err := d.getActualPathForRemote(dstDir.GetPath())
+	primaryDirActualPath, err := d.getActualPathForRemoteOnTarget(dstDir.GetPath(), 0)
 	if err != nil {
 		return fmt.Errorf("failed to convert path to remote path: %w", err)
+	}
+	if err := d.ensureDirOnTarget(ctx, 0, dstDir.GetPath()); err != nil {
+		return err
 	}
 
 	existing := d.linkedObject(streamer.GetExist())
 	logicalPath := path.Join(dstDir.GetPath(), streamer.GetName())
 	if streamer.GetSize() <= d.ChunkSize {
-		if err := op.Put(ctx, d.remoteStorage, dstDirActualPath, streamer, up, false); err != nil {
+		if err := op.Put(ctx, d.remoteTargets[0].Storage, primaryDirActualPath, streamer, up, false); err != nil {
 			return err
 		}
-		return d.cleanupReplacedObject(ctx, existing, d.buildKeepSet(logicalPath))
+		return d.cleanupReplacedObject(ctx, existing, d.buildKeepSet(d.targetLocation(logicalPath, 0)))
 	}
 
 	if up == nil {
@@ -301,9 +364,21 @@ func (d *Chunker) Put(ctx context.Context, dstDir model.Obj, streamer model.File
 
 	chunkCount := 0
 	remaining := streamer.GetSize()
-	keepPaths := []string{logicalPath}
+	keepLocations := make([]objectLocation, 0, len(d.remoteTargets)+1)
+	ensuredTargets := map[int]struct{}{0: {}}
 	for remaining > 0 {
 		chunkLen := utils.Min(remaining, d.ChunkSize)
+		targetIndex := d.chunkTargetIndex(chunkCount)
+		if _, ok := ensuredTargets[targetIndex]; !ok {
+			if err := d.ensureDirOnTarget(ctx, targetIndex, dstDir.GetPath()); err != nil {
+				return err
+			}
+			ensuredTargets[targetIndex] = struct{}{}
+		}
+		dstDirActualPath, err := d.getActualPathForRemoteOnTarget(dstDir.GetPath(), targetIndex)
+		if err != nil {
+			return err
+		}
 		chunkName := d.chunkPartBaseName(logicalPath, chunkCount, xactIDIfNeeded(d.MetaFormat, xactID))
 		chunkPath := d.makeChunkName(logicalPath, chunkCount, xactIDIfNeeded(d.MetaFormat, xactID))
 		partReader := driver.NewLimitedUploadStream(ctx, &driver.ReaderWithCtx{
@@ -323,10 +398,10 @@ func (d *Chunker) Put(ctx context.Context, dstDir model.Obj, streamer model.File
 			WebPutAsTask:      streamer.NeedStore(),
 			ForceStreamUpload: true,
 		}
-		if err := op.Put(ctx, d.remoteStorage, dstDirActualPath, partStream, nil, false); err != nil {
+		if err := op.Put(ctx, d.remoteTargets[targetIndex].Storage, dstDirActualPath, partStream, nil, false); err != nil {
 			return err
 		}
-		keepPaths = append(keepPaths, chunkPath)
+		keepLocations = append(keepLocations, d.targetLocation(chunkPath, targetIndex))
 		remaining -= chunkLen
 		chunkCount++
 	}
@@ -358,17 +433,20 @@ func (d *Chunker) Put(ctx context.Context, dstDir model.Obj, streamer model.File
 			WebPutAsTask:      false,
 			ForceStreamUpload: true,
 		}
-		if err := op.Put(ctx, d.remoteStorage, dstDirActualPath, metaStream, nil, false); err != nil {
+		if err := op.Put(ctx, d.remoteTargets[0].Storage, primaryDirActualPath, metaStream, nil, false); err != nil {
 			return err
 		}
+		keepLocations = append(keepLocations, d.targetLocation(logicalPath, 0))
 	} else {
-		actualPath, err := d.getActualPathForRemote(logicalPath)
-		if err == nil {
-			_ = op.Remove(ctx, d.remoteStorage, actualPath)
+		for remoteIndex := range d.remoteTargets {
+			actualPath, err := d.getActualPathForRemoteOnTarget(logicalPath, remoteIndex)
+			if err == nil {
+				_ = op.Remove(ctx, d.remoteTargets[remoteIndex].Storage, actualPath)
+			}
 		}
 	}
 
-	return d.cleanupReplacedObject(ctx, existing, d.buildKeepSet(keepPaths...))
+	return d.cleanupReplacedObject(ctx, existing, d.buildKeepSet(keepLocations...))
 }
 
 func xactIDIfNeeded(metaFormat, xactID string) string {

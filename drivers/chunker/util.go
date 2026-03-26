@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/fs"
 	"github.com/alist-org/alist/v3/internal/model"
 	"github.com/alist-org/alist/v3/internal/op"
@@ -23,7 +24,7 @@ import (
 )
 
 func (d *Chunker) validateOptions() error {
-	if d.RemotePath == "" {
+	if strings.TrimSpace(d.RemotePath) == "" {
 		return errors.New("remote_path is required")
 	}
 	if d.ChunkSize <= 0 {
@@ -45,48 +46,111 @@ func (d *Chunker) validateOptions() error {
 	return nil
 }
 
+func (d *Chunker) configuredRemotePaths() []string {
+	seen := map[string]struct{}{}
+	paths := make([]string, 0, 1)
+	addPath := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		p = utils.FixAndCleanPath(p)
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		paths = append(paths, p)
+	}
+
+	addPath(d.RemotePath)
+	for _, line := range strings.Split(d.RemotePaths, "\n") {
+		addPath(line)
+	}
+	return paths
+}
+
 func (d *Chunker) setChunkNameFormat(pattern string) error {
-	if strings.Count(pattern, "*") != 1 {
-		return errors.New("pattern must have exactly one asterisk (*)")
-	}
-	hashCount := strings.Count(pattern, "#")
-	if hashCount < 1 {
-		return errors.New("pattern must contain a hash character (#)")
-	}
-	if strings.Index(pattern, "*") > strings.Index(pattern, "#") {
-		return errors.New("asterisk (*) in pattern must come before hashes (#)")
-	}
-	if ok, _ := regexp.MatchString("^[^#]*[#]+[^#]*$", pattern); !ok {
-		return errors.New("hashes (#) in pattern must be consecutive")
-	}
 	if dir, _ := path.Split(pattern); dir != "" {
 		return errors.New("directory separator prohibited")
 	}
-	if pattern[0] != '*' {
-		return errors.New("pattern must start with asterisk")
+
+	nameStart, nameEnd, err := parseNameToken(pattern)
+	if err != nil {
+		return err
+	}
+	chunkStart, chunkEnd, chunkWidth, err := parseChunkToken(pattern)
+	if err != nil {
+		return err
+	}
+	if nameStart > chunkStart {
+		return errors.New("name token must come before chunk token")
 	}
 
-	reHashes := regexp.MustCompile("[#]+")
 	reDigits := "[0-9]+"
-	if hashCount > 1 {
-		reDigits = fmt.Sprintf("[0-9]{%d,}", hashCount)
+	if chunkWidth > 0 {
+		reDigits = fmt.Sprintf("[0-9]{%d,}", chunkWidth)
 	}
 	reDataOrCtrl := fmt.Sprintf("(?:(%s)|_(%s))", reDigits, ctrlTypeRegStr)
 
-	strRegex := regexp.QuoteMeta(pattern)
-	strRegex = reHashes.ReplaceAllLiteralString(strRegex, reDataOrCtrl)
-	strRegex = strings.Replace(strRegex, "\\*", "(.+?)", 1)
-	strRegex = fmt.Sprintf("^%s(?:%s|%s)?$", strRegex, tempSuffixRegStr, tempSuffixRegOld)
+	beforeName := pattern[:nameStart]
+	between := pattern[nameEnd:chunkStart]
+	afterChunk := pattern[chunkEnd:]
+
+	strRegex := fmt.Sprintf(
+		"^%s(.+?)%s%s%s(?:%s|%s)?$",
+		regexp.QuoteMeta(beforeName),
+		regexp.QuoteMeta(between),
+		reDataOrCtrl,
+		regexp.QuoteMeta(afterChunk),
+		tempSuffixRegStr,
+		tempSuffixRegOld,
+	)
 	d.nameRegexp = regexp.MustCompile(strRegex)
 
 	fmtDigits := "%d"
-	if hashCount > 1 {
-		fmtDigits = fmt.Sprintf("%%0%dd", hashCount)
+	if chunkWidth > 0 {
+		fmtDigits = fmt.Sprintf("%%0%dd", chunkWidth)
 	}
-	strFmt := strings.ReplaceAll(pattern, "%", "%%")
-	strFmt = strings.Replace(strFmt, "*", "%s", 1)
-	d.dataNameFmt = reHashes.ReplaceAllLiteralString(strFmt, fmtDigits)
+	d.dataNameFmt = strings.ReplaceAll(beforeName, "%", "%%") +
+		"%s" +
+		strings.ReplaceAll(between, "%", "%%") +
+		fmtDigits +
+		strings.ReplaceAll(afterChunk, "%", "%%")
 	return nil
+}
+
+func parseNameToken(pattern string) (start, end int, err error) {
+	nameMagicCount := strings.Count(pattern, "{name}")
+	switch nameMagicCount {
+	case 0:
+		return 0, 0, errors.New("pattern must contain one name token: {name}")
+	case 1:
+	default:
+		return 0, 0, errors.New("pattern must contain exactly one name token: {name}")
+	}
+	start = strings.Index(pattern, "{name}")
+	return start, start + len("{name}"), nil
+}
+
+func parseChunkToken(pattern string) (start, end, width int, err error) {
+	chunkMatches := chunkTokenRegexp.FindAllStringSubmatchIndex(pattern, -1)
+	switch len(chunkMatches) {
+	case 0:
+		return 0, 0, 0, errors.New("pattern must contain one chunk token: {chunk} or {chunk:N}")
+	case 1:
+	default:
+		return 0, 0, 0, errors.New("pattern must contain exactly one chunk token: {chunk} or {chunk:N}")
+	}
+	match := chunkMatches[0]
+	start = match[0]
+	end = match[1]
+	if match[2] >= 0 && match[3] >= 0 {
+		width, err = strconv.Atoi(pattern[match[2]:match[3]])
+		if err != nil || width <= 0 {
+			return 0, 0, 0, errors.New("chunk width in {chunk:N} must be a positive integer")
+		}
+	}
+	return start, end, width, nil
 }
 
 func (d *Chunker) makeChunkName(filePath string, chunkNo int, xactID string) string {
@@ -197,73 +261,157 @@ func unmarshalMetadata(data []byte) (*chunkMetadata, error) {
 	}, nil
 }
 
-func (d *Chunker) joinRemotePath(logicalPath string) string {
+func joinRemotePathWithBase(baseMountPath, logicalPath string) string {
 	logicalPath = utils.FixAndCleanPath(logicalPath)
 	if utils.PathEqual(logicalPath, "/") {
-		return d.RemotePath
+		return utils.FixAndCleanPath(baseMountPath)
 	}
-	return path.Join(d.RemotePath, logicalPath)
+	return path.Join(utils.FixAndCleanPath(baseMountPath), logicalPath)
+}
+
+func (d *Chunker) joinRemotePath(logicalPath string) string {
+	return joinRemotePathWithBase(d.RemotePath, logicalPath)
+}
+
+func (d *Chunker) joinRemotePathForTarget(logicalPath string, remoteIndex int) string {
+	target := d.remoteTargets[remoteIndex]
+	return joinRemotePathWithBase(target.MountPath, logicalPath)
 }
 
 func (d *Chunker) getActualPathForRemote(logicalPath string) (string, error) {
-	_, actualPath, err := op.GetStorageAndActualPath(d.joinRemotePath(logicalPath))
+	return d.getActualPathForRemoteOnTarget(logicalPath, 0)
+}
+
+func (d *Chunker) getActualPathForRemoteOnTarget(logicalPath string, remoteIndex int) (string, error) {
+	_, actualPath, err := op.GetStorageAndActualPath(d.joinRemotePathForTarget(logicalPath, remoteIndex))
 	return actualPath, err
 }
 
-func (d *Chunker) getActualChunkPath(filePath string, chunkNo int, xactID string) (string, error) {
-	return d.getActualPathForRemote(d.makeChunkName(filePath, chunkNo, xactID))
+func (d *Chunker) getActualChunkPath(filePath string, chunkNo int, xactID string, remoteIndex int) (string, error) {
+	return d.getActualPathForRemoteOnTarget(d.makeChunkName(filePath, chunkNo, xactID), remoteIndex)
+}
+
+func (d *Chunker) chunkTargetIndex(chunkNo int) int {
+	targetIndexes := d.chunkTargetIndexes()
+	if len(targetIndexes) == 0 {
+		return 0
+	}
+	if chunkNo < 0 {
+		return targetIndexes[0]
+	}
+	return targetIndexes[chunkNo%len(targetIndexes)]
+}
+
+func (d *Chunker) chunkTargetIndexes() []int {
+	if len(d.remoteTargets) <= 1 {
+		return []int{0}
+	}
+	if d.StoreChunksInPrimary {
+		targets := make([]int, 0, len(d.remoteTargets))
+		for i := range d.remoteTargets {
+			targets = append(targets, i)
+		}
+		return targets
+	}
+	targets := make([]int, 0, len(d.remoteTargets)-1)
+	for i := 1; i < len(d.remoteTargets); i++ {
+		targets = append(targets, i)
+	}
+	if len(targets) == 0 {
+		return []int{0}
+	}
+	return targets
+}
+
+func (d *Chunker) targetLocation(logicalPath string, remoteIndex int) objectLocation {
+	return objectLocation{
+		LogicalPath: utils.FixAndCleanPath(logicalPath),
+		RemoteIndex: remoteIndex,
+	}
+}
+
+func (d *Chunker) chunkLocation(filePath string, part chunkPart) objectLocation {
+	return d.targetLocation(d.makeChunkName(filePath, part.No, part.XactID), part.RemoteIndex)
 }
 
 func (d *Chunker) listDirObjects(ctx context.Context, dirPath string, refresh bool) ([]model.Obj, error) {
-	remotePath := d.joinRemotePath(dirPath)
-	entries, err := fsList(ctx, remotePath, refresh)
-	if err != nil {
-		return nil, err
-	}
-
 	groups := map[string]*groupInfo{}
-	var dirs []model.Obj
+	dirMap := map[string]model.Obj{}
+	found := false
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			dirs = append(dirs, &model.Object{
-				Name:     entry.GetName(),
-				Path:     path.Join(dirPath, entry.GetName()),
-				Size:     0,
-				Modified: entry.ModTime(),
-				Ctime:    entry.CreateTime(),
-				IsFolder: true,
-				HashInfo: entry.GetHash(),
-			})
-			continue
+	for remoteIndex := range d.remoteTargets {
+		remotePath := d.joinRemotePathForTarget(dirPath, remoteIndex)
+		entries, err := fsList(ctx, remotePath, refresh)
+		if err != nil {
+			if errs.IsObjectNotFound(err) {
+				continue
+			}
+			return nil, err
 		}
+		found = true
 
-		mainName, chunkNo, ctrlType, xactID := d.parseChunkName(entry.GetName())
-		if mainName == "" {
-			g := groups[entry.GetName()]
+		for _, entry := range entries {
+			if entry.IsDir() {
+				if _, ok := dirMap[entry.GetName()]; !ok {
+					dirMap[entry.GetName()] = &model.Object{
+						Name:     entry.GetName(),
+						Path:     path.Join(dirPath, entry.GetName()),
+						Size:     0,
+						Modified: entry.ModTime(),
+						Ctime:    entry.CreateTime(),
+						IsFolder: true,
+						HashInfo: entry.GetHash(),
+					}
+				}
+				continue
+			}
+
+			mainName, chunkNo, ctrlType, xactID := d.parseChunkName(entry.GetName())
+			if mainName == "" {
+				g := groups[entry.GetName()]
+				if g == nil {
+					g = &groupInfo{partsByXact: map[string]map[int]chunkPart{}}
+					groups[entry.GetName()] = g
+				}
+				if g.base == nil || remoteIndex < g.base.RemoteIndex {
+					g.base = &locatedObj{
+						Obj:         entry,
+						RemoteIndex: remoteIndex,
+					}
+				}
+				continue
+			}
+			if chunkNo < 0 || ctrlType != "" {
+				continue
+			}
+			g := groups[mainName]
 			if g == nil {
 				g = &groupInfo{partsByXact: map[string]map[int]chunkPart{}}
-				groups[entry.GetName()] = g
+				groups[mainName] = g
 			}
-			g.base = entry
-			continue
+			if g.partsByXact[xactID] == nil {
+				g.partsByXact[xactID] = map[int]chunkPart{}
+			}
+			part := chunkPart{
+				No:          chunkNo,
+				Size:        entry.GetSize(),
+				XactID:      xactID,
+				RemoteIndex: remoteIndex,
+			}
+			existing, ok := g.partsByXact[xactID][chunkNo]
+			if !ok || part.RemoteIndex < existing.RemoteIndex {
+				g.partsByXact[xactID][chunkNo] = part
+			}
 		}
-		if chunkNo < 0 || ctrlType != "" {
-			continue
-		}
-		g := groups[mainName]
-		if g == nil {
-			g = &groupInfo{partsByXact: map[string]map[int]chunkPart{}}
-			groups[mainName] = g
-		}
-		if g.partsByXact[xactID] == nil {
-			g.partsByXact[xactID] = map[int]chunkPart{}
-		}
-		g.partsByXact[xactID][chunkNo] = chunkPart{
-			No:     chunkNo,
-			Size:   entry.GetSize(),
-			XactID: xactID,
-		}
+	}
+
+	if !found && !utils.PathEqual(dirPath, "/") {
+		return nil, errs.ObjectNotFound
+	}
+
+	dirs := make([]model.Obj, 0, len(dirMap))
+	for _, obj := range dirMap {
+		dirs = append(dirs, obj)
 	}
 
 	result := make([]model.Obj, 0, len(dirs)+len(groups))
@@ -280,11 +428,180 @@ func (d *Chunker) listDirObjects(ctx context.Context, dirPath string, refresh bo
 	return result, nil
 }
 
+func (d *Chunker) targetPathExists(ctx context.Context, remoteIndex int, logicalPath string) (bool, error) {
+	_, err := fs.Get(ctx, d.joinRemotePathForTarget(logicalPath, remoteIndex), &fs.GetArgs{NoLog: true})
+	if err == nil {
+		return true, nil
+	}
+	if errs.IsObjectNotFound(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (d *Chunker) ensureDirOnTarget(ctx context.Context, remoteIndex int, logicalDirPath string) error {
+	logicalDirPath = utils.FixAndCleanPath(logicalDirPath)
+	if utils.PathEqual(logicalDirPath, "/") {
+		return nil
+	}
+	return fs.MakeDir(ctx, d.joinRemotePathForTarget(logicalDirPath, remoteIndex))
+}
+
+func (d *Chunker) ensureDirOnAllTargets(ctx context.Context, logicalDirPath string) error {
+	var errsList []error
+	for remoteIndex := range d.remoteTargets {
+		if err := d.ensureDirOnTarget(ctx, remoteIndex, logicalDirPath); err != nil {
+			errsList = append(errsList, err)
+		}
+	}
+	return errors.Join(errsList...)
+}
+
+func (d *Chunker) existingLocationsForDir(ctx context.Context, logicalDirPath string) ([]int, error) {
+	locations := make([]int, 0, len(d.remoteTargets))
+	for remoteIndex := range d.remoteTargets {
+		exists, err := d.targetPathExists(ctx, remoteIndex, logicalDirPath)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			locations = append(locations, remoteIndex)
+		}
+	}
+	return locations, nil
+}
+
+func (d *Chunker) dirLocationsOrAll(ctx context.Context, logicalDirPath string) ([]int, error) {
+	locations, err := d.existingLocationsForDir(ctx, logicalDirPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(locations) > 0 {
+		return locations, nil
+	}
+	all := make([]int, 0, len(d.remoteTargets))
+	for remoteIndex := range d.remoteTargets {
+		all = append(all, remoteIndex)
+	}
+	return all, nil
+}
+
+func (d *Chunker) moveDirAcrossTargets(ctx context.Context, srcPath, dstDirPath string) error {
+	locations, err := d.existingLocationsForDir(ctx, srcPath)
+	if err != nil {
+		return err
+	}
+	if len(locations) == 0 {
+		return errs.ObjectNotFound
+	}
+	var errsList []error
+	for _, remoteIndex := range locations {
+		if err := d.ensureDirOnTarget(ctx, remoteIndex, dstDirPath); err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		srcActualPath, err := d.getActualPathForRemoteOnTarget(srcPath, remoteIndex)
+		if err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		dstActualPath, err := d.getActualPathForRemoteOnTarget(dstDirPath, remoteIndex)
+		if err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		if err := op.Move(ctx, d.remoteTargets[remoteIndex].Storage, srcActualPath, dstActualPath); err != nil {
+			errsList = append(errsList, err)
+		}
+	}
+	return errors.Join(errsList...)
+}
+
+func (d *Chunker) copyDirAcrossTargets(ctx context.Context, srcPath, dstDirPath string) error {
+	locations, err := d.dirLocationsOrAll(ctx, srcPath)
+	if err != nil {
+		return err
+	}
+	var errsList []error
+	for _, remoteIndex := range locations {
+		exists, err := d.targetPathExists(ctx, remoteIndex, srcPath)
+		if err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		if !exists {
+			continue
+		}
+		if err := d.ensureDirOnTarget(ctx, remoteIndex, dstDirPath); err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		srcActualPath, err := d.getActualPathForRemoteOnTarget(srcPath, remoteIndex)
+		if err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		dstActualPath, err := d.getActualPathForRemoteOnTarget(dstDirPath, remoteIndex)
+		if err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		if err := op.Copy(ctx, d.remoteTargets[remoteIndex].Storage, srcActualPath, dstActualPath); err != nil {
+			errsList = append(errsList, err)
+		}
+	}
+	return errors.Join(errsList...)
+}
+
+func (d *Chunker) renameDirAcrossTargets(ctx context.Context, srcPath, newName string) error {
+	locations, err := d.existingLocationsForDir(ctx, srcPath)
+	if err != nil {
+		return err
+	}
+	if len(locations) == 0 {
+		return errs.ObjectNotFound
+	}
+	var errsList []error
+	for _, remoteIndex := range locations {
+		srcActualPath, err := d.getActualPathForRemoteOnTarget(srcPath, remoteIndex)
+		if err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		if err := op.Rename(ctx, d.remoteTargets[remoteIndex].Storage, srcActualPath, newName); err != nil {
+			errsList = append(errsList, err)
+		}
+	}
+	return errors.Join(errsList...)
+}
+
+func (d *Chunker) removeDirAcrossTargets(ctx context.Context, logicalPath string) error {
+	locations, err := d.existingLocationsForDir(ctx, logicalPath)
+	if err != nil {
+		return err
+	}
+	if len(locations) == 0 {
+		return errs.ObjectNotFound
+	}
+	var errsList []error
+	for _, remoteIndex := range locations {
+		actualPath, err := d.getActualPathForRemoteOnTarget(logicalPath, remoteIndex)
+		if err != nil {
+			errsList = append(errsList, err)
+			continue
+		}
+		if err := op.Remove(ctx, d.remoteTargets[remoteIndex].Storage, actualPath); err != nil {
+			errsList = append(errsList, err)
+		}
+	}
+	return errors.Join(errsList...)
+}
+
 func (d *Chunker) buildListedObject(ctx context.Context, dirPath, name string, group *groupInfo) (model.Obj, bool, error) {
 	var meta *chunkMetadata
 	var err error
-	if group.base != nil && group.base.GetSize() <= maxMetadataSizeRead && len(group.partsByXact) > 0 {
-		meta, err = d.readMetadata(ctx, path.Join(dirPath, name), group.base.GetSize())
+	if group.base != nil && group.base.Obj.GetSize() <= maxMetadataSizeRead && len(group.partsByXact) > 0 {
+		meta, err = d.readMetadata(ctx, path.Join(dirPath, name), group.base.Obj.GetSize(), group.base.RemoteIndex)
 		if err != nil {
 			meta = nil
 		}
@@ -295,13 +612,14 @@ func (d *Chunker) buildListedObject(ctx context.Context, dirPath, name string, g
 			Object: model.Object{
 				Name:     name,
 				Path:     path.Join(dirPath, name),
-				Size:     group.base.GetSize(),
-				Modified: group.base.ModTime(),
-				Ctime:    group.base.CreateTime(),
+				Size:     group.base.Obj.GetSize(),
+				Modified: group.base.Obj.ModTime(),
+				Ctime:    group.base.Obj.CreateTime(),
 				IsFolder: false,
-				HashInfo: group.base.GetHash(),
+				HashInfo: group.base.Obj.GetHash(),
 			},
-			Main: group.base,
+			Main:            group.base.Obj,
+			MainRemoteIndex: group.base.RemoteIndex,
 		}, true, nil
 	}
 
@@ -316,13 +634,14 @@ func (d *Chunker) buildListedObject(ctx context.Context, dirPath, name string, g
 			Object: model.Object{
 				Name:     name,
 				Path:     path.Join(dirPath, name),
-				Size:     group.base.GetSize(),
-				Modified: group.base.ModTime(),
-				Ctime:    group.base.CreateTime(),
+				Size:     group.base.Obj.GetSize(),
+				Modified: group.base.Obj.ModTime(),
+				Ctime:    group.base.Obj.CreateTime(),
 				IsFolder: false,
-				HashInfo: group.base.GetHash(),
+				HashInfo: group.base.Obj.GetHash(),
 			},
-			Main: group.base,
+			Main:            group.base.Obj,
+			MainRemoteIndex: group.base.RemoteIndex,
 		}, true, nil
 	}
 
@@ -334,15 +653,16 @@ func (d *Chunker) buildListedObject(ctx context.Context, dirPath, name string, g
 					Name:     name,
 					Path:     path.Join(dirPath, name),
 					Size:     meta.Size,
-					Modified: group.base.ModTime(),
-					Ctime:    group.base.CreateTime(),
+					Modified: group.base.Obj.ModTime(),
+					Ctime:    group.base.Obj.CreateTime(),
 					IsFolder: false,
 					HashInfo: buildHashInfo(meta),
 				},
-				Main:     group.base,
-				Meta:     meta,
-				Chunked:  true,
-				UsesMeta: true,
+				Main:            group.base.Obj,
+				MainRemoteIndex: group.base.RemoteIndex,
+				Meta:            meta,
+				Chunked:         true,
+				UsesMeta:        true,
 			}, true, nil
 		}
 		return nil, false, nil
@@ -355,11 +675,18 @@ func (d *Chunker) buildListedObject(ctx context.Context, dirPath, name string, g
 	modified := time.Time{}
 	ctime := time.Time{}
 	if group.base != nil {
-		modified = group.base.ModTime()
-		ctime = group.base.CreateTime()
+		modified = group.base.Obj.ModTime()
+		ctime = group.base.Obj.CreateTime()
 	}
 	if meta != nil {
 		size = meta.Size
+	}
+
+	mainRemoteIndex := 0
+	var mainObj model.Obj
+	if group.base != nil {
+		mainRemoteIndex = group.base.RemoteIndex
+		mainObj = group.base.Obj
 	}
 
 	return &Object{
@@ -372,20 +699,21 @@ func (d *Chunker) buildListedObject(ctx context.Context, dirPath, name string, g
 			IsFolder: false,
 			HashInfo: buildHashInfo(meta),
 		},
-		Main:     group.base,
-		Parts:    parts,
-		Meta:     meta,
-		Chunked:  true,
-		UsesMeta: meta != nil,
+		Main:            mainObj,
+		MainRemoteIndex: mainRemoteIndex,
+		Parts:           parts,
+		Meta:            meta,
+		Chunked:         true,
+		UsesMeta:        meta != nil,
 	}, true, nil
 }
 
-func (d *Chunker) readMetadata(ctx context.Context, logicalPath string, size int64) (*chunkMetadata, error) {
-	actualPath, err := d.getActualPathForRemote(logicalPath)
+func (d *Chunker) readMetadata(ctx context.Context, logicalPath string, size int64, remoteIndex int) (*chunkMetadata, error) {
+	actualPath, err := d.getActualPathForRemoteOnTarget(logicalPath, remoteIndex)
 	if err != nil {
 		return nil, err
 	}
-	link, obj, err := op.Link(ctx, d.remoteStorage, actualPath, model.LinkArgs{})
+	link, obj, err := op.Link(ctx, d.remoteTargets[remoteIndex].Storage, actualPath, model.LinkArgs{})
 	if err != nil {
 		return nil, err
 	}
@@ -441,22 +769,22 @@ func (d *Chunker) linkedObject(obj model.Obj) *Object {
 	return nil
 }
 
-func (d *Chunker) chunkPathsForObject(obj *Object) []string {
+func (d *Chunker) objectLocationsForObject(obj *Object) []objectLocation {
 	if obj == nil {
 		return nil
 	}
-	paths := make([]string, 0, len(obj.Parts)+1)
+	locations := make([]objectLocation, 0, len(obj.Parts)+1)
 	if obj.Chunked && obj.UsesMeta {
-		paths = append(paths, obj.GetPath())
+		locations = append(locations, d.targetLocation(obj.GetPath(), obj.MainRemoteIndex))
 	}
 	if !obj.Chunked {
-		paths = append(paths, obj.GetPath())
-		return paths
+		locations = append(locations, d.targetLocation(obj.GetPath(), obj.MainRemoteIndex))
+		return locations
 	}
 	for _, part := range obj.Parts {
-		paths = append(paths, d.makeChunkName(obj.GetPath(), part.No, part.XactID))
+		locations = append(locations, d.chunkLocation(obj.GetPath(), part))
 	}
-	return paths
+	return locations
 }
 
 func (d *Chunker) cleanupReplacedObject(ctx context.Context, obj *Object, keep map[string]struct{}) error {
@@ -464,29 +792,33 @@ func (d *Chunker) cleanupReplacedObject(ctx context.Context, obj *Object, keep m
 		return nil
 	}
 	var errs []error
-	for _, logicalPath := range d.chunkPathsForObject(obj) {
-		if _, ok := keep[logicalPath]; ok {
+	for _, location := range d.objectLocationsForObject(obj) {
+		if _, ok := keep[d.keepKey(location)]; ok {
 			continue
 		}
-		actualPath, err := d.getActualPathForRemote(logicalPath)
+		actualPath, err := d.getActualPathForRemoteOnTarget(location.LogicalPath, location.RemoteIndex)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if err := op.Remove(ctx, d.remoteStorage, actualPath); err != nil {
+		if err := op.Remove(ctx, d.remoteTargets[location.RemoteIndex].Storage, actualPath); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (d *Chunker) buildKeepSet(paths ...string) map[string]struct{} {
-	keep := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		if p == "" {
+func (d *Chunker) keepKey(location objectLocation) string {
+	return fmt.Sprintf("%d:%s", location.RemoteIndex, utils.FixAndCleanPath(location.LogicalPath))
+}
+
+func (d *Chunker) buildKeepSet(locations ...objectLocation) map[string]struct{} {
+	keep := make(map[string]struct{}, len(locations))
+	for _, location := range locations {
+		if location.LogicalPath == "" {
 			continue
 		}
-		keep[utils.FixAndCleanPath(p)] = struct{}{}
+		keep[d.keepKey(location)] = struct{}{}
 	}
 	return keep
 }

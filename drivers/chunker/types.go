@@ -19,13 +19,30 @@ const (
 )
 
 var ctrlTypeRegexp = regexp.MustCompile(`^` + ctrlTypeRegStr + `$`)
+var chunkTokenRegexp = regexp.MustCompile(`\{chunk(?::([0-9]+))?\}`)
 
 type Chunker struct {
 	model.Storage
 	Addition
 	remoteStorage driver.Driver
+	remoteTargets []remoteTarget
 	dataNameFmt   string
 	nameRegexp    *regexp.Regexp
+}
+
+type remoteTarget struct {
+	MountPath string
+	Storage   driver.Driver
+}
+
+type locatedObj struct {
+	Obj         model.Obj
+	RemoteIndex int
+}
+
+type objectLocation struct {
+	LogicalPath string
+	RemoteIndex int
 }
 
 type metadataJSON struct {
@@ -47,23 +64,25 @@ type chunkMetadata struct {
 }
 
 type chunkPart struct {
-	No     int
-	Size   int64
-	XactID string
+	No          int
+	Size        int64
+	XactID      string
+	RemoteIndex int
 }
 
 type groupInfo struct {
-	base        model.Obj
+	base        *locatedObj
 	partsByXact map[string]map[int]chunkPart
 }
 
 type Object struct {
 	model.Object
-	Main     model.Obj
-	Parts    []chunkPart
-	Meta     *chunkMetadata
-	Chunked  bool
-	UsesMeta bool
+	Main            model.Obj
+	MainRemoteIndex int
+	Parts           []chunkPart
+	Meta            *chunkMetadata
+	Chunked         bool
+	UsesMeta        bool
 }
 
 type linkedPart struct {
