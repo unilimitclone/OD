@@ -443,10 +443,9 @@ func (d *Streamtape) Other(ctx context.Context, args model.OtherArgs) (interface
 	}
 }
 
-func (d *Streamtape) remoteDlStatus(ctx context.Context, args model.OtherArgs) (interface{}, error) {
+func (d *Streamtape) extractRemoteUploadID(args model.OtherArgs) (string, error) {
 	uploadID := remoteUploadIDFromObjID(args.Obj.GetID())
 	if uploadID == "" {
-		// Try to get from data
 		if data, ok := args.Data.(map[string]interface{}); ok {
 			if id, ok := data["id"].(string); ok {
 				uploadID = id
@@ -454,7 +453,15 @@ func (d *Streamtape) remoteDlStatus(ctx context.Context, args model.OtherArgs) (
 		}
 	}
 	if uploadID == "" {
-		return nil, fmt.Errorf("remote upload ID required")
+		return "", fmt.Errorf("remote upload ID required")
+	}
+	return uploadID, nil
+}
+
+func (d *Streamtape) remoteDlStatus(ctx context.Context, args model.OtherArgs) (interface{}, error) {
+	uploadID, err := d.extractRemoteUploadID(args)
+	if err != nil {
+		return nil, err
 	}
 
 	var result remoteDlStatusResult
@@ -465,17 +472,9 @@ func (d *Streamtape) remoteDlStatus(ctx context.Context, args model.OtherArgs) (
 }
 
 func (d *Streamtape) remoteDlRemove(ctx context.Context, args model.OtherArgs) (interface{}, error) {
-	uploadID := remoteUploadIDFromObjID(args.Obj.GetID())
-	if uploadID == "" {
-		// Try to get from data
-		if data, ok := args.Data.(map[string]interface{}); ok {
-			if id, ok := data["id"].(string); ok {
-				uploadID = id
-			}
-		}
-	}
-	if uploadID == "" {
-		return nil, fmt.Errorf("remote upload ID required")
+	uploadID, err := d.extractRemoteUploadID(args)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := d.callAPI(ctx, "/remotedl/remove", map[string]string{"id": uploadID}, nil); err != nil {
