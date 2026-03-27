@@ -111,6 +111,8 @@ func Init(e *gin.Engine) {
 	_fs(auth.Group("/fs"))
 	share := auth.Group("/share", middlewares.AuthNotGuest)
 	share.POST("/create", handles.CreateShare)
+	share.POST("/update", handles.UpdateShare)
+	share.POST("/disable", handles.DisableShare)
 	share.GET("/list", handles.ListShares)
 	share.POST("/delete", handles.DeleteShare)
 	_task(auth.Group("/task", middlewares.AuthNotGuest))

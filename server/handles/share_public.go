@@ -36,17 +36,20 @@ func GetPublicShareInfo(c *gin.Context) {
 		_ = db.TouchShareView(share.ShareID)
 	}
 	common.SuccessResp(c, PublicShareInfoResp{
-		ShareID:       share.ShareID,
-		Name:          share.Name,
-		IsDir:         share.IsDir,
-		HasPassword:   share.HasPassword(),
-		BurnAfterRead: share.BurnAfterRead,
-		AllowPreview:  share.AllowPreview,
-		AllowDownload: share.AllowDownload,
-		Authed:        authed,
-		ConsumedAt:    share.ConsumedAt,
-		ExpiresAt:     share.ExpiresAt,
-		CreatedAt:     share.CreatedAt,
+		ShareID:           share.ShareID,
+		Name:              share.Name,
+		IsDir:             share.IsDir,
+		HasPassword:       share.HasPassword(),
+		BurnAfterRead:     share.EffectiveAccessLimit() == 1,
+		AccessLimit:       share.EffectiveAccessLimit(),
+		AccessCount:       share.AccessCount,
+		RemainingAccesses: share.RemainingAccesses(),
+		AllowPreview:      share.AllowPreview,
+		AllowDownload:     share.AllowDownload,
+		Authed:            authed,
+		ConsumedAt:        share.ConsumedAt,
+		ExpiresAt:         share.ExpiresAt,
+		CreatedAt:         share.CreatedAt,
 	})
 }
 
@@ -140,7 +143,7 @@ func ListPublicShare(c *gin.Context) {
 		}
 		content = append(content, toPublicShareObjResp(c, share, item, itemTargetPath, itemRelPath, token))
 	}
-	if err := consumeShareIfNeeded(share); err != nil {
+	if err := recordShareAccess(share); err != nil {
 		common.ErrorResp(c, err, 500, true)
 		return
 	}
@@ -225,7 +228,7 @@ func ShareDown(c *gin.Context) {
 		return
 	}
 	_ = db.TouchShareDownload(share.ShareID)
-	if err := consumeShareIfNeeded(share); err != nil {
+	if err := recordShareAccess(share); err != nil {
 		common.ErrorResp(c, err, 500, true)
 		return
 	}
@@ -264,7 +267,7 @@ func ShareProxy(c *gin.Context) {
 		common.ErrorStrResp(c, "directory preview is not supported", 400)
 		return
 	}
-	if err := consumeShareIfNeeded(share); err != nil {
+	if err := recordShareAccess(share); err != nil {
 		common.ErrorResp(c, err, 500, true)
 		return
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/alist-org/alist/v3/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func GetShareByShareID(shareID string) (*model.Share, error) {
@@ -15,9 +16,25 @@ func GetShareByShareID(shareID string) (*model.Share, error) {
 	return &share, nil
 }
 
+func GetShareByCreatorAndShareID(creatorID uint, shareID string) (*model.Share, error) {
+	var share model.Share
+	if err := db.Where("creator_id = ? AND share_id = ?", creatorID, shareID).Take(&share).Error; err != nil {
+		return nil, err
+	}
+	return &share, nil
+}
+
 func ShareIDExists(shareID string) bool {
 	var count int64
 	if err := db.Model(&model.Share{}).Where("share_id = ?", shareID).Count(&count).Error; err != nil {
+		return false
+	}
+	return count > 0
+}
+
+func ShareIDExistsExceptID(shareID string, id uint) bool {
+	var count int64
+	if err := db.Model(&model.Share{}).Where("share_id = ? AND id <> ?", shareID, id).Count(&count).Error; err != nil {
 		return false
 	}
 	return count > 0
@@ -45,6 +62,12 @@ func DeleteShareByShareID(creatorID uint, shareID string) error {
 	return db.Where("creator_id = ? AND share_id = ?", creatorID, shareID).Delete(&model.Share{}).Error
 }
 
+func DisableShareByShareID(creatorID uint, shareID string) error {
+	return db.Model(&model.Share{}).
+		Where("creator_id = ? AND share_id = ?", creatorID, shareID).
+		Update("enabled", false).Error
+}
+
 func TouchShareView(shareID string) error {
 	now := time.Now()
 	return db.Model(&model.Share{}).
@@ -65,13 +88,37 @@ func TouchShareDownload(shareID string) error {
 		}).Error
 }
 
-func ConsumeShare(shareID string) error {
-	now := time.Now()
-	return db.Model(&model.Share{}).
-		Where("share_id = ? AND burn_after_read = ? AND consumed_at IS NULL", shareID, true).
-		Updates(map[string]interface{}{
-			"enabled":        false,
-			"consumed_at":    now,
+func RecordShareAccess(shareID string) (*model.Share, error) {
+	var updated model.Share
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("share_id = ?", shareID).
+			Take(&updated).Error; err != nil {
+			return err
+		}
+
+		now := time.Now()
+		updated.AccessCount++
+		updated.LastAccessAt = &now
+		updates := map[string]interface{}{
+			"access_count":   updated.AccessCount,
 			"last_access_at": now,
-		}).Error
+		}
+
+		limit := updated.EffectiveAccessLimit()
+		if limit > 0 && updated.AccessCount >= limit {
+			updated.Enabled = false
+			updated.ConsumedAt = &now
+			updates["enabled"] = false
+			updates["consumed_at"] = now
+		}
+
+		return tx.Model(&model.Share{}).
+			Where("id = ?", updated.ID).
+			Updates(updates).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	stdpath "path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,14 +22,30 @@ import (
 
 const shareAccessTokenLifetime = 24 * time.Hour
 
+var shareIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
 type CreateShareReq struct {
 	Path          string `json:"path" binding:"required"`
+	ShareID       string `json:"share_id"`
 	Name          string `json:"name"`
 	Password      string `json:"password"`
+	ExpireAt      string `json:"expire_at"`
 	ExpireHours   int64  `json:"expire_hours"`
+	AccessLimit   int64  `json:"access_limit"`
 	BurnAfterRead *bool  `json:"burn_after_read"`
 	AllowPreview  *bool  `json:"allow_preview"`
 	AllowDownload *bool  `json:"allow_download"`
+}
+
+type UpdateShareReq struct {
+	ShareID       string  `json:"share_id" binding:"required"`
+	NewShareID    string  `json:"new_share_id"`
+	Name          string  `json:"name"`
+	Password      string  `json:"password"`
+	ExpireAt      *string `json:"expire_at"`
+	AccessLimit   *int64  `json:"access_limit"`
+	AllowPreview  *bool   `json:"allow_preview"`
+	AllowDownload *bool   `json:"allow_download"`
 }
 
 type ShareDeleteReq struct {
@@ -54,38 +71,44 @@ type PublicShareListReq struct {
 }
 
 type ShareResp struct {
-	ID            uint       `json:"id"`
-	ShareID       string     `json:"share_id"`
-	Name          string     `json:"name"`
-	RootPath      string     `json:"root_path"`
-	IsDir         bool       `json:"is_dir"`
-	HasPassword   bool       `json:"has_password"`
-	BurnAfterRead bool       `json:"burn_after_read"`
-	AllowPreview  bool       `json:"allow_preview"`
-	AllowDownload bool       `json:"allow_download"`
-	Enabled       bool       `json:"enabled"`
-	ViewCount     int64      `json:"view_count"`
-	DownloadCount int64      `json:"download_count"`
-	LastAccessAt  *time.Time `json:"last_access_at"`
-	ConsumedAt    *time.Time `json:"consumed_at"`
-	ExpiresAt     *time.Time `json:"expires_at"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	URL           string     `json:"url"`
+	ID                uint       `json:"id"`
+	ShareID           string     `json:"share_id"`
+	Name              string     `json:"name"`
+	RootPath          string     `json:"root_path"`
+	IsDir             bool       `json:"is_dir"`
+	HasPassword       bool       `json:"has_password"`
+	BurnAfterRead     bool       `json:"burn_after_read"`
+	AccessLimit       int64      `json:"access_limit"`
+	AccessCount       int64      `json:"access_count"`
+	RemainingAccesses int64      `json:"remaining_accesses"`
+	AllowPreview      bool       `json:"allow_preview"`
+	AllowDownload     bool       `json:"allow_download"`
+	Enabled           bool       `json:"enabled"`
+	ViewCount         int64      `json:"view_count"`
+	DownloadCount     int64      `json:"download_count"`
+	LastAccessAt      *time.Time `json:"last_access_at"`
+	ConsumedAt        *time.Time `json:"consumed_at"`
+	ExpiresAt         *time.Time `json:"expires_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	URL               string     `json:"url"`
 }
 
 type PublicShareInfoResp struct {
-	ShareID       string     `json:"share_id"`
-	Name          string     `json:"name"`
-	IsDir         bool       `json:"is_dir"`
-	HasPassword   bool       `json:"has_password"`
-	BurnAfterRead bool       `json:"burn_after_read"`
-	AllowPreview  bool       `json:"allow_preview"`
-	AllowDownload bool       `json:"allow_download"`
-	Authed        bool       `json:"authed"`
-	ConsumedAt    *time.Time `json:"consumed_at"`
-	ExpiresAt     *time.Time `json:"expires_at"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ShareID           string     `json:"share_id"`
+	Name              string     `json:"name"`
+	IsDir             bool       `json:"is_dir"`
+	HasPassword       bool       `json:"has_password"`
+	BurnAfterRead     bool       `json:"burn_after_read"`
+	AccessLimit       int64      `json:"access_limit"`
+	AccessCount       int64      `json:"access_count"`
+	RemainingAccesses int64      `json:"remaining_accesses"`
+	AllowPreview      bool       `json:"allow_preview"`
+	AllowDownload     bool       `json:"allow_download"`
+	Authed            bool       `json:"authed"`
+	ConsumedAt        *time.Time `json:"consumed_at"`
+	ExpiresAt         *time.Time `json:"expires_at"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 type PublicShareObjResp struct {
@@ -121,33 +144,41 @@ func shareURL(c *gin.Context, shareID string) string {
 }
 
 func toShareResp(c *gin.Context, share *model.Share) ShareResp {
+	accessLimit := share.EffectiveAccessLimit()
 	return ShareResp{
-		ID:            share.ID,
-		ShareID:       share.ShareID,
-		Name:          share.Name,
-		RootPath:      share.RootPath,
-		IsDir:         share.IsDir,
-		HasPassword:   share.HasPassword(),
-		BurnAfterRead: share.BurnAfterRead,
-		AllowPreview:  share.AllowPreview,
-		AllowDownload: share.AllowDownload,
-		Enabled:       share.Enabled,
-		ViewCount:     share.ViewCount,
-		DownloadCount: share.DownloadCount,
-		LastAccessAt:  share.LastAccessAt,
-		ConsumedAt:    share.ConsumedAt,
-		ExpiresAt:     share.ExpiresAt,
-		CreatedAt:     share.CreatedAt,
-		UpdatedAt:     share.UpdatedAt,
-		URL:           shareURL(c, share.ShareID),
+		ID:                share.ID,
+		ShareID:           share.ShareID,
+		Name:              share.Name,
+		RootPath:          share.RootPath,
+		IsDir:             share.IsDir,
+		HasPassword:       share.HasPassword(),
+		BurnAfterRead:     accessLimit == 1,
+		AccessLimit:       accessLimit,
+		AccessCount:       share.AccessCount,
+		RemainingAccesses: share.RemainingAccesses(),
+		AllowPreview:      share.AllowPreview,
+		AllowDownload:     share.AllowDownload,
+		Enabled:           share.Enabled,
+		ViewCount:         share.ViewCount,
+		DownloadCount:     share.DownloadCount,
+		LastAccessAt:      share.LastAccessAt,
+		ConsumedAt:        share.ConsumedAt,
+		ExpiresAt:         share.ExpiresAt,
+		CreatedAt:         share.CreatedAt,
+		UpdatedAt:         share.UpdatedAt,
+		URL:               shareURL(c, share.ShareID),
 	}
 }
 
 func normalizeShareName(obj model.Obj, name string) string {
+	return normalizeOptionalShareName(name, obj.GetName())
+}
+
+func normalizeOptionalShareName(name, fallback string) string {
 	if strings.TrimSpace(name) != "" {
 		return strings.TrimSpace(name)
 	}
-	return obj.GetName()
+	return fallback
 }
 
 func generateShareID() (string, error) {
@@ -162,6 +193,84 @@ func generateShareID() (string, error) {
 
 func sharePasswordHash(password, salt string) string {
 	return model.HashPwd(model.StaticHash(password), salt)
+}
+
+func validateCustomShareID(shareID string) error {
+	if shareID == "" {
+		return nil
+	}
+	if !shareIDPattern.MatchString(shareID) {
+		return fmt.Errorf("share_id must be 1-32 characters of letters, numbers, underscore or hyphen")
+	}
+	return nil
+}
+
+func resolveRequestedShareID(rawShareID, fallback string, excludeID uint) (string, error) {
+	shareID := strings.TrimSpace(rawShareID)
+	if shareID == "" {
+		if fallback != "" {
+			return fallback, nil
+		}
+		return generateShareID()
+	}
+	if err := validateCustomShareID(shareID); err != nil {
+		return "", err
+	}
+	if excludeID == 0 {
+		if db.ShareIDExists(shareID) {
+			return "", fmt.Errorf("share link already exists")
+		}
+		return shareID, nil
+	}
+	if db.ShareIDExistsExceptID(shareID, excludeID) {
+		return "", fmt.Errorf("share link already exists")
+	}
+	return shareID, nil
+}
+
+func normalizeShareAccessLimit(accessLimit int64, burnAfterRead *bool) (int64, bool, error) {
+	if accessLimit < 0 {
+		return 0, false, fmt.Errorf("access_limit must be 0 or greater")
+	}
+	if accessLimit == 0 && burnAfterRead != nil && *burnAfterRead {
+		accessLimit = 1
+	}
+	return accessLimit, accessLimit == 1, nil
+}
+
+func parseShareExpireAt(raw string) (*time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return &parsed, nil
+	}
+	layouts := []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return &parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid expire_at")
+}
+
+func resolveShareExpireAt(expireAt string, expireHours int64) (*time.Time, error) {
+	if strings.TrimSpace(expireAt) != "" {
+		return parseShareExpireAt(expireAt)
+	}
+	if expireHours < 0 {
+		return nil, fmt.Errorf("expire_hours must be 0 or greater")
+	}
+	if expireHours == 0 {
+		return nil, nil
+	}
+	expires := time.Now().Add(time.Duration(expireHours) * time.Hour)
+	return &expires, nil
 }
 
 func sharePasswordMatched(share *model.Share, password string) bool {
@@ -184,7 +293,7 @@ func getShareAccessToken(c *gin.Context, fallback string) string {
 
 func ensureShareAvailable(c *gin.Context, share *model.Share) bool {
 	now := time.Now()
-	if share.ConsumedAt != nil {
+	if share.IsConsumed() {
 		common.ErrorStrResp(c, "share has been consumed", 410)
 		return false
 	}
@@ -199,16 +308,14 @@ func ensureShareAvailable(c *gin.Context, share *model.Share) bool {
 	return true
 }
 
-func consumeShareIfNeeded(share *model.Share) error {
-	if !share.BurnAfterRead || share.ConsumedAt != nil {
-		return nil
-	}
-	now := time.Now()
-	if err := db.ConsumeShare(share.ShareID); err != nil {
+func recordShareAccess(share *model.Share) error {
+	updated, err := db.RecordShareAccess(share.ShareID)
+	if err != nil {
 		return err
 	}
-	share.Enabled = false
-	share.ConsumedAt = &now
+	if updated != nil {
+		*share = *updated
+	}
 	return nil
 }
 
@@ -314,9 +421,9 @@ func CreateShare(c *gin.Context) {
 		common.ErrorResp(c, err, 500)
 		return
 	}
-	shareID, err := generateShareID()
+	shareID, err := resolveRequestedShareID(req.ShareID, "", 0)
 	if err != nil {
-		common.ErrorResp(c, err, 500, true)
+		common.ErrorResp(c, err, 400)
 		return
 	}
 	allowPreview := true
@@ -327,14 +434,15 @@ func CreateShare(c *gin.Context) {
 	if req.AllowDownload != nil {
 		allowDownload = *req.AllowDownload
 	}
-	burnAfterRead := false
-	if req.BurnAfterRead != nil {
-		burnAfterRead = *req.BurnAfterRead
+	accessLimit, burnAfterRead, err := normalizeShareAccessLimit(req.AccessLimit, req.BurnAfterRead)
+	if err != nil {
+		common.ErrorResp(c, err, 400)
+		return
 	}
-	var expiresAt *time.Time
-	if req.ExpireHours > 0 {
-		expires := time.Now().Add(time.Duration(req.ExpireHours) * time.Hour)
-		expiresAt = &expires
+	expiresAt, err := resolveShareExpireAt(req.ExpireAt, req.ExpireHours)
+	if err != nil {
+		common.ErrorResp(c, err, 400)
+		return
 	}
 	share := &model.Share{
 		ShareID:       shareID,
@@ -343,6 +451,7 @@ func CreateShare(c *gin.Context) {
 		RootPath:      reqPath,
 		IsDir:         obj.IsDir(),
 		BurnAfterRead: burnAfterRead,
+		AccessLimit:   accessLimit,
 		AllowPreview:  allowPreview,
 		AllowDownload: allowDownload,
 		Enabled:       true,
@@ -353,6 +462,78 @@ func CreateShare(c *gin.Context) {
 		share.PasswordHash = sharePasswordHash(req.Password, share.PasswordSalt)
 	}
 	if err := db.CreateShare(share); err != nil {
+		common.ErrorResp(c, err, 500, true)
+		return
+	}
+	common.SuccessResp(c, toShareResp(c, share))
+}
+
+func UpdateShare(c *gin.Context) {
+	var req UpdateShareReq
+	if err := c.ShouldBind(&req); err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	user := c.MustGet("user").(*model.User)
+	share, err := db.GetShareByCreatorAndShareID(user.ID, req.ShareID)
+	if err != nil {
+		common.ErrorResp(c, err, 404)
+		return
+	}
+
+	shareID, err := resolveRequestedShareID(req.NewShareID, share.ShareID, share.ID)
+	if err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+
+	allowPreview := share.AllowPreview
+	if req.AllowPreview != nil {
+		allowPreview = *req.AllowPreview
+	}
+	allowDownload := share.AllowDownload
+	if req.AllowDownload != nil {
+		allowDownload = *req.AllowDownload
+	}
+
+	accessLimit := share.EffectiveAccessLimit()
+	burnAfterRead := accessLimit == 1
+	if req.AccessLimit != nil {
+		accessLimit, burnAfterRead, err = normalizeShareAccessLimit(*req.AccessLimit, nil)
+		if err != nil {
+			common.ErrorResp(c, err, 400)
+			return
+		}
+	}
+
+	expiresAt := share.ExpiresAt
+	if req.ExpireAt != nil {
+		expiresAt, err = parseShareExpireAt(*req.ExpireAt)
+		if err != nil {
+			common.ErrorResp(c, err, 400)
+			return
+		}
+	}
+
+	share.ShareID = shareID
+	share.Name = normalizeOptionalShareName(req.Name, share.Name)
+	share.BurnAfterRead = burnAfterRead
+	share.AccessLimit = accessLimit
+	share.AllowPreview = allowPreview
+	share.AllowDownload = allowDownload
+	share.ExpiresAt = expiresAt
+	if req.Password != "" {
+		share.PasswordSalt = random.String(16)
+		share.PasswordHash = sharePasswordHash(req.Password, share.PasswordSalt)
+	}
+	if share.Enabled && accessLimit > 0 && share.AccessCount >= accessLimit {
+		now := time.Now()
+		share.Enabled = false
+		if share.ConsumedAt == nil {
+			share.ConsumedAt = &now
+		}
+	}
+	if err := db.UpdateShare(share); err != nil {
 		common.ErrorResp(c, err, 500, true)
 		return
 	}
@@ -380,6 +561,24 @@ func ListShares(c *gin.Context) {
 		Content: resp,
 		Total:   total,
 	})
+}
+
+func DisableShare(c *gin.Context) {
+	var req ShareDeleteReq
+	if err := c.ShouldBind(&req); err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	user := c.MustGet("user").(*model.User)
+	if _, err := db.GetShareByCreatorAndShareID(user.ID, req.ShareID); err != nil {
+		common.ErrorResp(c, err, 404)
+		return
+	}
+	if err := db.DisableShareByShareID(user.ID, req.ShareID); err != nil {
+		common.ErrorResp(c, err, 500, true)
+		return
+	}
+	common.SuccessResp(c)
 }
 
 func DeleteShare(c *gin.Context) {
