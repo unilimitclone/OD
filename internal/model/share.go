@@ -11,12 +11,14 @@ type Share struct {
 	IsDir         bool       `json:"is_dir"`
 	PasswordHash  string     `json:"-" gorm:"size:64"`
 	PasswordSalt  string     `json:"-" gorm:"size:32"`
+	BurnAfterRead bool       `json:"burn_after_read" gorm:"default:false"`
 	AllowPreview  bool       `json:"allow_preview" gorm:"default:true"`
 	AllowDownload bool       `json:"allow_download" gorm:"default:true"`
 	Enabled       bool       `json:"enabled" gorm:"default:true;index"`
 	ViewCount     int64      `json:"view_count"`
 	DownloadCount int64      `json:"download_count"`
 	LastAccessAt  *time.Time `json:"last_access_at"`
+	ConsumedAt    *time.Time `json:"consumed_at"`
 	ExpiresAt     *time.Time `json:"expires_at"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`

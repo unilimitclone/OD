@@ -40,9 +40,11 @@ func GetPublicShareInfo(c *gin.Context) {
 		Name:          share.Name,
 		IsDir:         share.IsDir,
 		HasPassword:   share.HasPassword(),
+		BurnAfterRead: share.BurnAfterRead,
 		AllowPreview:  share.AllowPreview,
 		AllowDownload: share.AllowDownload,
 		Authed:        authed,
+		ConsumedAt:    share.ConsumedAt,
 		ExpiresAt:     share.ExpiresAt,
 		CreatedAt:     share.CreatedAt,
 	})
@@ -138,6 +140,10 @@ func ListPublicShare(c *gin.Context) {
 		}
 		content = append(content, toPublicShareObjResp(c, share, item, itemTargetPath, itemRelPath, token))
 	}
+	if err := consumeShareIfNeeded(share); err != nil {
+		common.ErrorResp(c, err, 500, true)
+		return
+	}
 	common.SuccessResp(c, PublicShareListResp{
 		Content:    content,
 		Total:      int64(total),
@@ -219,6 +225,10 @@ func ShareDown(c *gin.Context) {
 		return
 	}
 	_ = db.TouchShareDownload(share.ShareID)
+	if err := consumeShareIfNeeded(share); err != nil {
+		common.ErrorResp(c, err, 500, true)
+		return
+	}
 	c.Set("path", targetPath)
 	Down(c)
 }
@@ -252,6 +262,10 @@ func ShareProxy(c *gin.Context) {
 	}
 	if obj.IsDir() {
 		common.ErrorStrResp(c, "directory preview is not supported", 400)
+		return
+	}
+	if err := consumeShareIfNeeded(share); err != nil {
+		common.ErrorResp(c, err, 500, true)
 		return
 	}
 	c.Set("path", targetPath)

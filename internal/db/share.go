@@ -64,3 +64,14 @@ func TouchShareDownload(shareID string) error {
 			"download_count": gorm.Expr("download_count + ?", 1),
 		}).Error
 }
+
+func ConsumeShare(shareID string) error {
+	now := time.Now()
+	return db.Model(&model.Share{}).
+		Where("share_id = ? AND burn_after_read = ? AND consumed_at IS NULL", shareID, true).
+		Updates(map[string]interface{}{
+			"enabled":        false,
+			"consumed_at":    now,
+			"last_access_at": now,
+		}).Error
+}
