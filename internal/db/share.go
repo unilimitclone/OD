@@ -24,20 +24,20 @@ func GetShareByCreatorAndShareID(creatorID uint, shareID string) (*model.Share, 
 	return &share, nil
 }
 
-func ShareIDExists(shareID string) bool {
+func ShareIDExists(shareID string) (bool, error) {
 	var count int64
 	if err := db.Model(&model.Share{}).Where("share_id = ?", shareID).Count(&count).Error; err != nil {
-		return false
+		return false, err
 	}
-	return count > 0
+	return count > 0, nil
 }
 
-func ShareIDExistsExceptID(shareID string, id uint) bool {
+func ShareIDExistsExceptID(shareID string, id uint) (bool, error) {
 	var count int64
 	if err := db.Model(&model.Share{}).Where("share_id = ? AND id <> ?", shareID, id).Count(&count).Error; err != nil {
-		return false
+		return false, err
 	}
-	return count > 0
+	return count > 0, nil
 }
 
 func CreateShare(share *model.Share) error {

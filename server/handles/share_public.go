@@ -2,7 +2,6 @@ package handles
 
 import (
 	stdpath "path"
-	"strings"
 	"time"
 
 	"github.com/alist-org/alist/v3/internal/db"
@@ -143,10 +142,6 @@ func ListPublicShare(c *gin.Context) {
 		}
 		content = append(content, toPublicShareObjResp(c, share, item, itemTargetPath, itemRelPath, token))
 	}
-	if err := recordShareAccess(share); err != nil {
-		common.ErrorResp(c, err, 500, true)
-		return
-	}
 	common.SuccessResp(c, PublicShareListResp{
 		Content:    content,
 		Total:      int64(total),
@@ -213,7 +208,7 @@ func ShareDown(c *gin.Context) {
 	if !ensureShareAccess(c, share, token) {
 		return
 	}
-	targetPath, _, err := resolveShareTarget(share, strings.TrimPrefix(c.Param("path"), "/"))
+	targetPath, _, err := resolveShareWildcardTarget(share, c.Param("path"))
 	if err != nil {
 		common.ErrorResp(c, err, 400)
 		return
@@ -227,10 +222,12 @@ func ShareDown(c *gin.Context) {
 		common.ErrorStrResp(c, "directory download is not supported", 400)
 		return
 	}
-	_ = db.TouchShareDownload(share.ShareID)
-	if err := recordShareAccess(share); err != nil {
-		common.ErrorResp(c, err, 500, true)
-		return
+	if shouldTrackShareContentAccess(c) {
+		_ = db.TouchShareDownload(share.ShareID)
+		if err := recordShareAccess(share); err != nil {
+			common.ErrorResp(c, err, 500, true)
+			return
+		}
 	}
 	c.Set("path", targetPath)
 	Down(c)
@@ -253,7 +250,7 @@ func ShareProxy(c *gin.Context) {
 	if !ensureShareAccess(c, share, token) {
 		return
 	}
-	targetPath, _, err := resolveShareTarget(share, strings.TrimPrefix(c.Param("path"), "/"))
+	targetPath, _, err := resolveShareWildcardTarget(share, c.Param("path"))
 	if err != nil {
 		common.ErrorResp(c, err, 400)
 		return
@@ -267,9 +264,11 @@ func ShareProxy(c *gin.Context) {
 		common.ErrorStrResp(c, "directory preview is not supported", 400)
 		return
 	}
-	if err := recordShareAccess(share); err != nil {
-		common.ErrorResp(c, err, 500, true)
-		return
+	if shouldTrackShareContentAccess(c) {
+		if err := recordShareAccess(share); err != nil {
+			common.ErrorResp(c, err, 500, true)
+			return
+		}
 	}
 	c.Set("path", targetPath)
 	Proxy(c)

@@ -2,7 +2,9 @@ package handles
 
 import (
 	"crypto/subtle"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	stdpath "path"
 	"regexp"
@@ -23,6 +25,11 @@ import (
 const shareAccessTokenLifetime = 24 * time.Hour
 
 var shareIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
+var (
+	errShareIDInvalid = errors.New("share_id must be 1-32 characters of letters, numbers, underscore or hyphen")
+	errShareIDExists  = errors.New("share link already exists")
+)
 
 type CreateShareReq struct {
 	Path          string `json:"path" binding:"required"`
@@ -184,7 +191,11 @@ func normalizeOptionalShareName(name, fallback string) string {
 func generateShareID() (string, error) {
 	for range 10 {
 		shareID := random.String(8)
-		if !db.ShareIDExists(shareID) {
+		exists, err := db.ShareIDExists(shareID)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
 			return shareID, nil
 		}
 	}
@@ -200,7 +211,7 @@ func validateCustomShareID(shareID string) error {
 		return nil
 	}
 	if !shareIDPattern.MatchString(shareID) {
-		return fmt.Errorf("share_id must be 1-32 characters of letters, numbers, underscore or hyphen")
+		return errShareIDInvalid
 	}
 	return nil
 }
@@ -217,13 +228,21 @@ func resolveRequestedShareID(rawShareID, fallback string, excludeID uint) (strin
 		return "", err
 	}
 	if excludeID == 0 {
-		if db.ShareIDExists(shareID) {
-			return "", fmt.Errorf("share link already exists")
+		exists, err := db.ShareIDExists(shareID)
+		if err != nil {
+			return "", fmt.Errorf("check share id availability: %w", err)
+		}
+		if exists {
+			return "", errShareIDExists
 		}
 		return shareID, nil
 	}
-	if db.ShareIDExistsExceptID(shareID, excludeID) {
-		return "", fmt.Errorf("share link already exists")
+	exists, err := db.ShareIDExistsExceptID(shareID, excludeID)
+	if err != nil {
+		return "", fmt.Errorf("check share id availability: %w", err)
+	}
+	if exists {
+		return "", errShareIDExists
 	}
 	return shareID, nil
 }
@@ -334,6 +353,10 @@ func ensureShareAccess(c *gin.Context, share *model.Share, token string) bool {
 	return true
 }
 
+func shouldTrackShareContentAccess(c *gin.Context) bool {
+	return c.Request.Method != http.MethodHead
+}
+
 func resolveShareTarget(share *model.Share, rawRelPath string) (string, string, error) {
 	cleanRelPath := utils.FixAndCleanPath(rawRelPath)
 	if !share.IsDir && cleanRelPath != "/" {
@@ -347,6 +370,14 @@ func resolveShareTarget(share *model.Share, rawRelPath string) (string, string, 
 		return "", "", fmt.Errorf("share path out of range")
 	}
 	return target, cleanRelPath, nil
+}
+
+func resolveShareWildcardTarget(share *model.Share, rawPath string) (string, string, error) {
+	path, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return "", "", err
+	}
+	return resolveShareTarget(share, strings.TrimPrefix(path, "/"))
 }
 
 func buildPublicShareAssetURL(c *gin.Context, prefix, shareID, relPath, token string, preview bool) string {
@@ -423,7 +454,11 @@ func CreateShare(c *gin.Context) {
 	}
 	shareID, err := resolveRequestedShareID(req.ShareID, "", 0)
 	if err != nil {
-		common.ErrorResp(c, err, 400)
+		if errors.Is(err, errShareIDInvalid) || errors.Is(err, errShareIDExists) {
+			common.ErrorResp(c, err, 400)
+			return
+		}
+		common.ErrorResp(c, err, 500, true)
 		return
 	}
 	allowPreview := true
@@ -483,7 +518,11 @@ func UpdateShare(c *gin.Context) {
 
 	shareID, err := resolveRequestedShareID(req.NewShareID, share.ShareID, share.ID)
 	if err != nil {
-		common.ErrorResp(c, err, 400)
+		if errors.Is(err, errShareIDInvalid) || errors.Is(err, errShareIDExists) {
+			common.ErrorResp(c, err, 400)
+			return
+		}
+		common.ErrorResp(c, err, 500, true)
 		return
 	}
 
