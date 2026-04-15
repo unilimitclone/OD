@@ -27,6 +27,8 @@ const (
 	PermReadArchives
 	PermDecompress
 	PermPathLimit
+	PermMCPAccess
+	PermMCPManage
 )
 
 func HasPermission(perm int32, bit uint) bool {

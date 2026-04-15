@@ -49,6 +49,8 @@ type User struct {
 	//   12: can read archives
 	//   13: can decompress archives
 	//   14: check path limit
+	//   15: mcp read
+	//   16: mcp write
 	Permission int32  `json:"permission"`
 	OtpSecret  string `json:"-"`
 	SsoID      string `json:"sso_id"` // unique by sso platform
@@ -142,6 +144,14 @@ func (u *User) CanDecompress() bool {
 
 func (u *User) CheckPathLimit() bool {
 	return (u.Permission>>14)&1 == 1
+}
+
+func (u *User) CanMCPAccess() bool {
+	return (u.Permission>>15)&1 == 1
+}
+
+func (u *User) CanMCPManage() bool {
+	return (u.Permission>>16)&1 == 1
 }
 
 func (u *User) JoinPath(reqPath string) (string, error) {
