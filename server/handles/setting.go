@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/alist-org/alist/v3/internal/conf"
+	"github.com/alist-org/alist/v3/internal/frp"
 	"github.com/alist-org/alist/v3/internal/model"
 	"github.com/alist-org/alist/v3/internal/op"
 	"github.com/alist-org/alist/v3/internal/sign"
@@ -181,6 +182,42 @@ func DeleteSetting(c *gin.Context) {
 		return
 	}
 	common.SuccessResp(c)
+}
+
+// SetFRP saves FRP settings and restarts the FRP client.
+// Returns the current FRP connection status.
+func SetFRP(c *gin.Context) {
+	var req []model.SettingItem
+	if err := c.ShouldBind(&req); err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	if err := op.SaveSettingItems(req); err != nil {
+		common.ErrorResp(c, err, 500)
+		return
+	}
+	if err := frp.Instance.Restart(); err != nil {
+		common.SuccessResp(c, frp.Instance.Status())
+		return
+	}
+	common.SuccessResp(c, frp.Instance.Status())
+}
+
+// StopFRP stops the FRP client and returns current status.
+func StopFRP(c *gin.Context) {
+	frp.Instance.Stop()
+	common.SuccessResp(c, frp.Instance.Status())
+}
+
+// GetFRPRuntime returns current FRP status and recent runtime logs.
+func GetFRPRuntime(c *gin.Context) {
+	limit := 200
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil {
+			limit = parsed
+		}
+	}
+	common.SuccessResp(c, frp.Instance.Runtime(limit))
 }
 
 func PublicSettings(c *gin.Context) {
