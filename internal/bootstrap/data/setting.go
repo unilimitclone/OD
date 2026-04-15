@@ -220,6 +220,21 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.FTPTLSPrivateKeyPath, Value: "", Type: conf.TypeString, Group: model.FTP, Flag: model.PRIVATE},
 		{Key: conf.FTPTLSPublicCertPath, Value: "", Type: conf.TypeString, Group: model.FTP, Flag: model.PRIVATE},
 
+		// frp settings
+		{Key: conf.FRPEnabled, Value: "false", Type: conf.TypeBool, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPServerAddr, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPServerPort, Value: "7000", Type: conf.TypeNumber, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPAuthToken, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPProxyName, Value: "alist", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPProxyType, Value: "http", Type: conf.TypeSelect, Options: "http,https,tcp,stcp", Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPCustomDomain, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPSubdomain, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPRemotePort, Value: "0", Type: conf.TypeNumber, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPLocalPort, Value: "5244", Type: conf.TypeNumber, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPTLSEnable, Value: "false", Type: conf.TypeBool, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPSTCPSecretKey, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE, Help: "Required for stcp proxy type"},
+		{Key: conf.FRPStatus, Value: "stopped", Type: conf.TypeString, Group: model.FRP, Flag: model.READONLY},
+
 		// traffic settings
 		{Key: conf.TaskOfflineDownloadThreadsNum, Value: strconv.Itoa(conf.Conf.Tasks.Download.Workers), Type: conf.TypeNumber, Group: model.TRAFFIC, Flag: model.PRIVATE},
 		{Key: conf.TaskOfflineDownloadTransferThreadsNum, Value: strconv.Itoa(conf.Conf.Tasks.Transfer.Workers), Type: conf.TypeNumber, Group: model.TRAFFIC, Flag: model.PRIVATE},
