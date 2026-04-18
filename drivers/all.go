@@ -24,9 +24,11 @@ import (
 	_ "github.com/alist-org/alist/v3/drivers/baidu_youth"
 	_ "github.com/alist-org/alist/v3/drivers/bitqiu"
 	_ "github.com/alist-org/alist/v3/drivers/chaoxing"
+	_ "github.com/alist-org/alist/v3/drivers/chunker"
 	_ "github.com/alist-org/alist/v3/drivers/cloudreve"
 	_ "github.com/alist-org/alist/v3/drivers/cloudreve_v4"
 	_ "github.com/alist-org/alist/v3/drivers/crypt"
+	_ "github.com/alist-org/alist/v3/drivers/darkibox"
 	_ "github.com/alist-org/alist/v3/drivers/doubao"
 	_ "github.com/alist-org/alist/v3/drivers/doubao_new"
 	_ "github.com/alist-org/alist/v3/drivers/doubao_share"
@@ -84,6 +86,7 @@ import (
 	_ "github.com/alist-org/alist/v3/drivers/wopan"
 	_ "github.com/alist-org/alist/v3/drivers/wukong"
 	_ "github.com/alist-org/alist/v3/drivers/yandex_disk"
+	_ "github.com/alist-org/alist/v3/drivers/yunpan360"
 )
 
 // All do nothing,just for import
