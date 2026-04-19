@@ -22,6 +22,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/fs"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/alist-org/alist/v3/server"
+	mcpserver "github.com/alist-org/alist/v3/server/mcp"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -159,6 +160,19 @@ the address is defined in config file`,
 				}()
 			}
 		}
+		var mcpHttpSrv *http.Server
+		if conf.Conf.MCP.Port != -1 && conf.Conf.MCP.Enable {
+			mcpHandler := mcpserver.NewHTTPHandler()
+			mcpBase := fmt.Sprintf("%s:%d", conf.Conf.Scheme.Address, conf.Conf.MCP.Port)
+			utils.Log.Infof("start MCP server @ %s", mcpBase)
+			mcpHttpSrv = &http.Server{Addr: mcpBase, Handler: mcpHandler}
+			go func() {
+				err := mcpHttpSrv.ListenAndServe()
+				if err != nil && !errors.Is(err, http.ErrServerClosed) {
+					utils.Log.Fatalf("failed to start MCP server: %s", err.Error())
+				}
+			}()
+		}
 		// Wait for interrupt signal to gracefully shutdown the server with
 		// a timeout of 1 second.
 		quit := make(chan os.Signal, 1)
@@ -217,6 +231,15 @@ the address is defined in config file`,
 				defer wg.Done()
 				if err := sftpServer.Close(); err != nil {
 					utils.Log.Fatal("SFTP server shutdown err: ", err)
+				}
+			}()
+		}
+		if conf.Conf.MCP.Port != -1 && conf.Conf.MCP.Enable && mcpHttpSrv != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := mcpHttpSrv.Shutdown(ctx); err != nil {
+					utils.Log.Fatal("MCP server shutdown err: ", err)
 				}
 			}()
 		}
