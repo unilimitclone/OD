@@ -18,6 +18,7 @@ import (
 	"github.com/alist-org/alist/v3/cmd/flags"
 	"github.com/alist-org/alist/v3/internal/bootstrap"
 	"github.com/alist-org/alist/v3/internal/conf"
+	"github.com/alist-org/alist/v3/internal/frp"
 	"github.com/alist-org/alist/v3/internal/fs"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/alist-org/alist/v3/server"
@@ -44,6 +45,7 @@ the address is defined in config file`,
 		bootstrap.InitOfflineDownloadTools()
 		bootstrap.LoadStorages()
 		bootstrap.InitTaskManager()
+		bootstrap.InitFRP()
 		if !flags.Debug && !flags.Dev {
 			gin.SetMode(gin.ReleaseMode)
 		}
@@ -181,6 +183,7 @@ the address is defined in config file`,
 		<-quit
 		utils.Log.Println("Shutdown server...")
 		fs.ArchiveContentUploadTaskManager.RemoveAll()
+		frp.Instance.Stop()
 		Release()
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()

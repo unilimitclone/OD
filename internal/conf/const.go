@@ -125,6 +125,21 @@ const (
 	FTPTLSPrivateKeyPath = "ftp_tls_private_key_path"
 	FTPTLSPublicCertPath = "ftp_tls_public_cert_path"
 
+	// frp
+	FRPEnabled      = "frp_enabled"
+	FRPServerAddr   = "frp_server_addr"
+	FRPServerPort   = "frp_server_port"
+	FRPAuthToken    = "frp_auth_token"
+	FRPProxyName    = "frp_proxy_name"
+	FRPProxyType    = "frp_proxy_type"
+	FRPCustomDomain = "frp_custom_domain"
+	FRPSubdomain    = "frp_subdomain"
+	FRPRemotePort   = "frp_remote_port"
+	FRPLocalPort    = "frp_local_port"
+	FRPTLSEnable    = "frp_tls_enable"
+	FRPSTCPSecretKey = "frp_stcp_secret_key"
+	FRPStatus       = "frp_status"
+
 	// traffic
 	TaskOfflineDownloadThreadsNum         = "offline_download_task_threads_num"
 	TaskOfflineDownloadTransferThreadsNum = "offline_download_transfer_task_threads_num"
