@@ -118,6 +118,41 @@ func TestThunderInitRestoresSessionWithRefreshToken(t *testing.T) {
 	}
 }
 
+func TestThunderInitRestoresSessionWithoutRotatedRefreshToken(t *testing.T) {
+	ms := newMockServer()
+	ms.handler = func(path string, w http.ResponseWriter, r *http.Request) {
+		switch path {
+		case "/v1/auth/token":
+			// 服务端刷新成功但未轮换 refresh token（响应里该字段为空）
+			writeJSON(w, TokenResp{
+				TokenType: "Bearer", AccessToken: "at-1",
+				ExpiresIn: 7200, UserID: "u1",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+	defer ms.Close()
+
+	x := newTestThunder("thunder-test-no-rotate")
+	x.Addition.RefreshToken = "rt-old"
+
+	if err := x.Init(nil); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// 刷新成功：不应回退到账号密码登录
+	if got := ms.Paths(); !reflect.DeepEqual(got, []string{"/v1/auth/token"}) {
+		t.Fatalf("unexpected requests: %v", got)
+	}
+	// refresh token 未轮换时应保留旧值
+	if x.Addition.RefreshToken != "rt-old" {
+		t.Fatalf("RefreshToken = %q, want preserved %q", x.Addition.RefreshToken, "rt-old")
+	}
+	if x.Token() != "Bearer at-1" {
+		t.Fatalf("Token() = %q, want %q", x.Token(), "Bearer at-1")
+	}
+}
+
 func TestThunderInitFallsBackToLoginAndPersists(t *testing.T) {
 	ms := newMockServer()
 	ms.handler = func(path string, w http.ResponseWriter, r *http.Request) {
