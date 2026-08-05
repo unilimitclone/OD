@@ -4,6 +4,12 @@ import (
 	"github.com/alist-org/alist/v3/internal/model"
 )
 
+const (
+	// Open123ToolName is the name the 123 Open offline download tool registers
+	// itself under.
+	Open123ToolName = "123 Open"
+)
+
 type AddUrlArgs struct {
 	Url     string
 	UID     string
