@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -90,7 +91,7 @@ func (d *LanZou) _post(url string, callback base.ReqCallback, resp interface{}, 
 		if info == "" {
 			info = utils.Json.Get(data, "info").ToString()
 		}
-		return data, fmt.Errorf(info)
+		return data, errors.New(info)
 	}
 }
 
@@ -102,7 +103,11 @@ func (d *LanZou) request(url string, method string, callback base.ReqCallback, u
 		})
 		client = upClient
 	} else {
-		client = base.RestyClient
+		d.clientOnce.Do(func() {
+			jar, _ := cookiejar.New(nil)
+			d.client = base.RestyClient.Clone().SetCookieJar(jar)
+		})
+		client = d.client
 	}
 
 	// acw_sc__v2 反爬挑战可能出现在任意页面/接口(分享页、iframe 页、ajaxm.php 等)。
@@ -115,10 +120,10 @@ func (d *LanZou) request(url string, method string, callback base.ReqCallback, u
 			"Referer":    "https://pc.woozooo.com",
 			"User-Agent": d.UserAgent,
 		})
-		if d.Cookie != "" {
+		if d.Cookie != "" && strings.HasPrefix(url, strings.TrimRight(d.BaseUrl, "/")+"/") {
 			req.SetHeader("cookie", d.Cookie)
 		}
-		if acwScV2 != "" {
+		if acwScV2 != "" && client.GetClient().Jar == nil {
 			req.SetCookie(&http.Cookie{Name: "acw_sc__v2", Value: acwScV2})
 		}
 		if callback != nil {
@@ -139,6 +144,13 @@ func (d *LanZou) request(url string, method string, callback base.ReqCallback, u
 				return body, e
 			}
 			acwScV2 = vs
+			if jar := client.GetClient().Jar; jar != nil {
+				jar.SetCookies(res.Request.RawRequest.URL, []*http.Cookie{{
+					Name:  "acw_sc__v2",
+					Value: vs,
+					Path:  "/",
+				}})
+			}
 			continue
 		}
 		return body, nil
@@ -308,8 +320,30 @@ var findSubFolderReg = regexp.MustCompile(`(?i)(?:folderlink|mbxfolder).+href="/
 // 获取下载页面链接
 var findDownPageParamReg = regexp.MustCompile(`<iframe.*?src="(.+?)"`)
 
-// 获取文件ID
-var findFileIDReg = regexp.MustCompile(`'/ajaxm\.php\?file=(\d+)'`)
+// 获取下载接口及文件 ID。旧页面使用 ajaxm.php，新版密码文件页面使用
+// ajaxfile.php；地址也可能使用单/双引号或完整 URL。
+var findAjaxPathReg = regexp.MustCompile(`(?i)(/ajax(?:m|file)\.php\?file=(\d+)\b)`)
+var findFileIDVarReg = regexp.MustCompile(`(?i)\b(?:f_id|fid)\s*=\s*['"]?(\d+)['"]?\s*;`)
+
+func findFileID(data string) (string, bool) {
+	if matches := findAjaxPathReg.FindStringSubmatch(data); len(matches) == 3 {
+		return matches[2], true
+	}
+	if matches := findFileIDVarReg.FindStringSubmatch(data); len(matches) == 2 {
+		return matches[1], true
+	}
+	return "", false
+}
+
+func getAjaxmPath(data string) string {
+	if matches := findAjaxPathReg.FindStringSubmatch(data); len(matches) == 3 {
+		return matches[1]
+	}
+	if fileID, ok := findFileID(data); ok {
+		return "/ajaxm.php?file=" + fileID
+	}
+	return "/ajaxm.php"
+}
 
 // GET 页面并去除注释(acw_sc__v2 反爬挑战已在 request 层统一处理)
 func (d *LanZou) getHtml(url string, callback base.ReqCallback) (string, error) {
@@ -394,15 +428,17 @@ func (d *LanZou) getFilesByShareUrl(shareID, pwd string, sharePageData string) (
 		}
 		param["p"] = pwd
 
-		fileIDs := findFileIDReg.FindStringSubmatch(sharePageData)
-		var fileID string
-		if len(fileIDs) > 1 {
-			fileID = fileIDs[1]
-		} else {
-			return nil, fmt.Errorf("not find file id")
-		}
 		var resp FileShareInfoAndUrlResp[string]
-		_, err = d.post(d.ShareUrl+"/ajaxm.php?file="+fileID, func(req *resty.Request) { req.SetFormData(param) }, &resp)
+		_, err = d.post(d.ShareUrl+getAjaxmPath(sharePageData), func(req *resty.Request) {
+			req.SetHeader("Accept", "application/json, text/javascript, */*; q=0.01")
+			req.SetHeader("Referer", strings.TrimRight(d.ShareUrl, "/")+"/"+shareID)
+			req.SetHeader("Origin", strings.TrimRight(d.ShareUrl, "/"))
+			req.SetHeader("X-Requested-With", "XMLHttpRequest")
+			req.SetHeader("Sec-Fetch-Dest", "empty")
+			req.SetHeader("Sec-Fetch-Mode", "cors")
+			req.SetHeader("Sec-Fetch-Site", "same-origin")
+			req.SetFormData(param)
+		}, &resp)
 		if err != nil {
 			return nil, err
 		}
@@ -425,15 +461,8 @@ func (d *LanZou) getFilesByShareUrl(shareID, pwd string, sharePageData string) (
 			return nil, err
 		}
 
-		fileIDs := findFileIDReg.FindStringSubmatch(nextPageData)
-		var fileID string
-		if len(fileIDs) > 1 {
-			fileID = fileIDs[1]
-		} else {
-			return nil, fmt.Errorf("not find file id")
-		}
 		var resp FileShareInfoAndUrlResp[int]
-		_, err = d.post(d.ShareUrl+"/ajaxm.php?file="+fileID, func(req *resty.Request) { req.SetFormData(param) }, &resp)
+		_, err = d.post(d.ShareUrl+getAjaxmPath(nextPageData), func(req *resty.Request) { req.SetFormData(param) }, &resp)
 		if err != nil {
 			return nil, err
 		}
