@@ -3,6 +3,7 @@ package lanzou
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/alist-org/alist/v3/drivers/base"
 	"github.com/alist-org/alist/v3/internal/driver"
@@ -19,6 +20,9 @@ type LanZou struct {
 	vei string
 
 	flag int32
+
+	clientOnce sync.Once
+	client     *resty.Client
 }
 
 func (d *LanZou) Config() driver.Config {
