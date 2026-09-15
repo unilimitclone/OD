@@ -50,11 +50,16 @@ func FsStream(c *gin.Context) {
 		}
 	}
 	dir, name := stdpath.Split(path)
-	sizeStr := c.GetHeader("Content-Length")
-	size, err := strconv.ParseInt(sizeStr, 10, 64)
-	if err != nil {
-		common.ErrorResp(c, err, 400)
-		return
+	size := c.Request.ContentLength
+	if sizeStr := c.GetHeader("Content-Length"); sizeStr != "" {
+		size, err = strconv.ParseInt(sizeStr, 10, 64)
+		if err != nil {
+			common.ErrorResp(c, err, 400)
+			return
+		}
+	}
+	if size < 0 {
+		size = 0
 	}
 	h := make(map[*utils.HashType]string)
 	if md5 := c.GetHeader("X-File-Md5"); md5 != "" {
